@@ -4,29 +4,6 @@
 
 Эта инструкция написана максимально просто и подробно, чтобы любой участник команды (даже без опыта программирования) мог скопировать команды и запустить проект на своём компьютере.
 
----
-
-## Исправления по результатам код-ревью безопасности (п. 1–8)
-
-1. **Изоляция секретов СУБД от контейнеров приложения (`.env.db` и `.env.app`)**:
-   - В `compose.yaml` переменные окружения разделены: контейнер `db` читает `.env.db` (с паролем суперпользователя `POSTGRES_PASSWORD`), а контейнеры `web` и `scheduler` читают только `.env.app` (с паролем ограниченной роли `labcrm` `NOSUPERUSER NOCREATEDB NOCREATEROLE`). Утечка окружения из Python-приложения больше не раскрывает пароль суперпользователя PostgreSQL.
-2. **Полная поддержка HTTPS за прокси и `manage.py check --deploy`**:
-   - В боевом режиме (`DEBUG=False`) по умолчанию включены `SESSION_COOKIE_SECURE=True`, `CSRF_COOKIE_SECURE=True`, `CSRF_COOKIE_HTTPONLY=True`, `SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")`, `CSRF_TRUSTED_ORIGINS`, `SECURE_HSTS_SECONDS=31536000`, `SECURE_HSTS_INCLUDE_SUBDOMAINS=True`, `SECURE_HSTS_PRELOAD=True`, `SECURE_SSL_REDIRECT=True`.
-3. **Защита `/admin/login/` от перебора паролей (brute-force)**:
-   - Встроен `AdminLoginRateLimitMiddleware` (`lab/security.py`), блокирующий вход с кодом `429 Too Many Requests` после 5 неудачных попыток за 15 минут (по IP и связке логин+IP), плюс автоматическая интеграция `django-axes` и `limit_req_zone` в `deploy/nginx.conf`.
-4. **Перепроверка роли «Руководители» в момент `approve` / `return`**:
-   - В `TaskEvent.clean()` при действиях `approve` и `return` дополнительно проверяется `lead(u)`, чтобы сотрудник, исключённый из группы «Руководители» после назначения ревьюером, не мог утвердить задачу.
-5. **Запрет списания реактивов через `Preparation` в обход роли «Склад»**:
-   - Создание и проведение `Preparation` (`complete()`), а также инлайны списания материалов закрыты проверкой `warehouse(user)` как в админке, так и на уровне модели (`Preparation.clean()` и `Preparation.complete()`).
-6. **Защита от CSV-инъекций с учётом `\t`, `\r`, `\n`**:
-   - Функция `safe_cell()` проверяет опасные префиксы `("=", "+", "-", "@", "\t", "\r", "\n")` до и после `.lstrip()`, не пропуская табуляции и переводы каретки.
-7. **Независимый от `ALLOWED_HOSTS` и `SECURE_SSL_REDIRECT` Docker Healthcheck**:
-   - `HealthcheckMiddleware` стоит первым в `MIDDLEWARE` и отвечает на `/healthz/` (проверяя `SELECT 1` в БД) до `SecurityMiddleware` и `CommonMiddleware`, а `127.0.0.1` и `localhost` всегда сохраняются в `ALLOWED_HOSTS`. Контейнер `web` остаётся `healthy` при любом боевом домене.
-8. **Автотесты (`pytest` + `manage.py test`) и GitHub Actions CI**:
-   - Добавлены `pytest.ini`, тесты на все сценарии приёмки и безопасности в `lab/tests.py`, а также пайплайн `.github/workflows/ci.yml` (проверяет миграции, `manage.py check --deploy --fail-level WARNING` и запускает `pytest`).
-
----
-
 ## Отдельная папка для визуализации (HTML + CSS + Vue.js)
 
 В проекте выделена отдельная папка `frontend/`, чтобы вся кастомная вёрстка и визуализация на **Vue.js** лежали отдельно от серверного кода Django:
