@@ -1281,3 +1281,6 @@ class AutoclavingAdmin(CaptureAdmin):
             obj.status = Autoclaving.Status.DRAFT
         super().save_model(request, obj, form, change)
 
+# LABCRM_UI_STAGE1: presentation only; no permissions or stock changes.
+from .admin_navigation import configure_admin as _configure_lab_admin
+_configure_lab_admin(admin.site)

@@ -962,7 +962,8 @@ class Lot(models.Model):
         return bool(self.expiry and self.expiry < timezone.localdate())
 
     def __str__(self):
-        return f"{self.name} · {self.code} [{self.unit}]"
+        from .presentation import lot_label
+        return lot_label(self)
 
     class Meta:
         verbose_name = "Продукт на склад"
@@ -1557,11 +1558,8 @@ class Preparation(Dated):
         self.refresh_from_db()
 
     def __str__(self):
-        if self.output_id:
-            return f"{self.kind} · {self.output.code}"
-
-        number = self.pk or "новое"
-        return f"{self.kind} · приготовление {number}"
+        from .presentation import preparation_label
+        return preparation_label(self)
 
     class Meta:
         verbose_name = 'Приготовление раствора или буфера'
