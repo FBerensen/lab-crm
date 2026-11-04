@@ -1,0 +1,12 @@
+{% extends "admin/change_list.html" %}
+
+{% block object-tools-items %}
+  {% if has_add_permission %}
+    <li>
+      <a href="{% url 'admin:lab_sample_batch_add' %}">
+        Добавить партию
+      </a>
+    </li>
+  {% endif %}
+  {{ block.super }}
+{% endblock %}

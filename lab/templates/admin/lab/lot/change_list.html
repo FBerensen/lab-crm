@@ -1,0 +1,21 @@
+{% extends "admin/change_list.html" %}
+
+{% block object-tools-items %}
+  {% if has_add_permission %}
+    <li>
+      <a href="{% url 'admin:lab_lot_add_kind' kind='plastic' %}">
+        Добавить пластик
+      </a>
+    </li>
+    <li>
+      <a href="{% url 'admin:lab_lot_add_kind' kind='reagent' %}">
+        Добавить реактив
+      </a>
+    </li>
+    <li>
+      <a href="{% url 'admin:lab_lot_add_kind' kind='buffer' %}">
+        Добавить буфер
+      </a>
+    </li>
+  {% endif %}
+{% endblock %}

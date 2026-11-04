@@ -1,0 +1,44 @@
+# Пароли и локальные настройки
+.env
+.env.*
+!.env.example
+
+# Резервные копии базы
+backups/
+*.dump
+*.sql
+*.sqlite3
+*.sqlite3-*
+
+# Локальные копии исходных файлов
+*.backup*
+*.bak
+*~
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Служебные файлы приложения
+staticfiles/
+media/
+*.log
+
+# Локальные настройки редакторов
+.vscode/
+.idea/
+
+# Windows
+Thumbs.db
+Desktop.ini
+
+# Старый сборщик: не является способом обновления CRM
+create_labcrm.py
+# Copies before manual fixes
+*.before-fix
+
+# Accidental nested repository and old copies
+/g/
+*.before-fix
