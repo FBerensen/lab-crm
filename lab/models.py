@@ -1185,6 +1185,10 @@ class Preparation(Dated):
         editable=False,
     )
 
+    autoclaving_done = models.BooleanField("Автоклавирование всей партии выполнено", default=False, editable=False)
+    autoclaved_by = fk(USER, "Кто отметил автоклавирование", null=True, blank=True, related_name="+", editable=False)
+    autoclaved_at = models.DateTimeField("Когда отмечено автоклавирование", null=True, blank=True, editable=False)
+
     def complete(self):
         with transaction.atomic():
             p = Preparation.objects.select_for_update().get(pk=self.pk)
@@ -1455,20 +1459,46 @@ class Preparation(Dated):
                 autoclaving_required=bool(recipe.product.requires_autoclaving),
             )
 
+    def mark_autoclaved(self, user, *, confirmed_full_batch=False):
+        from .preparation_access import can_mark_autoclaving
+        with transaction.atomic():
+            p = Preparation.objects.select_for_update().get(pk=self.pk)
+            if not can_mark_autoclaving(user, p):
+                raise ValidationError("Нет права отмечать обработку этого приготовления.")
+            if not confirmed_full_batch:
+                raise ValidationError("Подтвердите обработку всей исходной партии.")
+            if not p.processed or not p.output_id:
+                raise ValidationError("Сначала проведите приготовление.")
+            if p.autoclaving_required is not True:
+                raise ValidationError("Обработка не требуется либо требование исторической записи неизвестно.")
+            if p.approved_at is not None:
+                raise ValidationError("Допущенную партию изменять нельзя.")
+            if p.autoclaving_done:
+                raise ValidationError("Обработка уже отмечена. Перезапись запрещена.")
+            lot = Lot.objects.select_for_update().get(pk=p.output_id)
+            if lot.released or lot.quantity != p.qty or lot.reserved != 0:
+                raise ValidationError("Статус или остаток партии изменён. Нужна отдельная проверка.")
+            if lot.expired:
+                raise ValidationError("Срок годности партии истёк.")
+            p.autoclaving_done = True
+            p.autoclaved_by = user
+            p.autoclaved_at = timezone.now()
+            p.save(update_fields=["autoclaving_done", "autoclaved_by", "autoclaved_at"])
+            Audit.objects.create(actor=user, entity=p._meta.label, object_id=str(p.pk),
+                detail=f"Отмечено автоклавирование всей партии: {p.qty} {lot.unit}. Без отдельного утверждения цикла.")
+        self.refresh_from_db()
+
     def approve(self, user):
         with transaction.atomic():
-            if not lead(user):
-                raise ValidationError("Допуск выполняет руководитель.")
+            from .preparation_access import can_approve_preparation
+            if not can_approve_preparation(user):
+                raise ValidationError("Нет права допуска: проверьте роль и разрешение допуска приготовлений.")
 
             p = Preparation.objects.select_for_update().get(pk=self.pk)
             if not p.processed or not p.output_id:
                 raise ValidationError("Сначала проведите приготовление.")
             if p.approved_at is not None:
                 raise ValidationError("Партия уже допущена.")
-            if p.actor_id == user.pk:
-                raise ValidationError(
-                    "Собственную подготовку допускает другой руководитель."
-                )
             if p.autoclaving_required is None:
                 raise ValidationError(
                     "Историческая запись: требование автоклавирования "
@@ -1491,7 +1521,15 @@ class Preparation(Dated):
                 )
 
             cycle = None
-            if p.autoclaving_required:
+            if p.autoclaving_required and p.autoclaving_done:
+                if p.autoclaved_by_id is None or p.autoclaved_at is None:
+                    raise ValidationError("Отметка автоклавирования неполна.")
+                later_cycles = AutoclavingItem.objects.filter(
+                    lot_id=lot.pk, cycle__created_at__gt=p.autoclaved_at,
+                )
+                if later_cycles.exists():
+                    raise ValidationError("После отметки зарегистрирован новый цикл. Нужна отдельная проверка истории обработки.")
+            if p.autoclaving_required and not p.autoclaving_done:
                 cycle_ids = AutoclavingItem.objects.filter(
                     lot_id=lot.pk
                 ).values("cycle_id")
@@ -1552,7 +1590,7 @@ class Preparation(Dated):
                 object_id=str(p.pk),
                 detail=(
                     "Допуск готовой партии; "
-                    + (f"цикл #{cycle.pk}" if cycle else "автоклавирование не требовалось")
+                    + (f"цикл #{cycle.pk}" if cycle else (f"отметка обработки {p.autoclaved_at.isoformat()}" if p.autoclaving_required else "автоклавирование не требовалось"))
                 ),
             )
         self.refresh_from_db()
@@ -1564,6 +1602,14 @@ class Preparation(Dated):
     class Meta:
         verbose_name = 'Приготовление раствора или буфера'
         verbose_name_plural = 'Приготовление растворов и буферов'
+        permissions = [("approve_preparation", "Может допускать приготовленные растворы и буферы")]
+        constraints = [
+            models.CheckConstraint(
+                condition=(models.Q(autoclaving_done=False, autoclaved_by__isnull=True, autoclaved_at__isnull=True)
+                    | models.Q(autoclaving_done=True, autoclaved_by__isnull=False, autoclaved_at__isnull=False)),
+                name="prep_autoclaving_mark_complete",
+            ),
+        ]
 
 
 class Component(models.Model):

@@ -477,9 +477,10 @@ class ComponentInline(admin.TabularInline):
 
         return super().get_formset(request, obj, **kwargs)
 
-@admin.action(description="Допустить выбранные готовые партии")
+@admin.action(description="Допустить выбранную готовую партию")
 def approve_preparations(modeladmin, request, queryset):
-    if not lead(request.user):
+    from .preparation_access import can_approve_preparation
+    if not can_approve_preparation(request.user):
         raise PermissionDenied
     ids = list(queryset.values_list("pk", flat=True)[:2])
     if len(ids) != 1:
@@ -646,8 +647,9 @@ class PreparationAdmin(CaptureAdmin):
     )
 
     def get_actions(self, request):
+        from .preparation_access import can_approve_preparation
         actions = super().get_actions(request)
-        if not lead(request.user):
+        if not can_approve_preparation(request.user):
             actions.pop("approve_preparations", None)
         return actions
 
@@ -1284,3 +1286,7 @@ class AutoclavingAdmin(CaptureAdmin):
 # LABCRM_UI_STAGE1: presentation only; no permissions or stock changes.
 from .admin_navigation import configure_admin as _configure_lab_admin
 _configure_lab_admin(admin.site)
+
+# LABCRM_PREPARATION_STAGE2
+from .preparation_stage2_admin import configure_admin as _configure_stage2
+_configure_stage2(admin.site)

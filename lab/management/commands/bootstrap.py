@@ -6,6 +6,6 @@ class Command(BaseCommand):
     help = "Создать группы ролей без создания пользователей."
 
     def handle(self, *args, **options):
-        for name in ("Руководители", "Склад", "Исполнители"):
+        for name in ("Руководители", "Склад", "Исполнители", "Стажёры"):
             Group.objects.get_or_create(name=name)
         self.stdout.write("Группы ролей созданы.")
