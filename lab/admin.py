@@ -361,75 +361,374 @@ class MovementAdmin(CaptureAdmin):
 class ComponentInline(admin.TabularInline):
     model = Component
     extra = 1
-    min_num = 1
-    validate_min = True
 
+    fields = (
+        "recipe_component",
+        "lot",
+        "qty",
+    )
+
+    def has_view_permission(self, request, obj=None):
+        return request.user.is_active and request.user.is_staff
+
+    def can_edit(self, request, obj):
+        return bool(
+            request.user.is_active
+            and request.user.is_staff
+            and obj is not None
+            and not obj.processed
+            and obj.kind == "Приготовление реактива"
+            and (
+                obj.actor_id == request.user.pk
+                or lead(request.user)
+            )
+        )
+
+    def has_add_permission(self, request, obj=None):
+        return self.can_edit(request, obj)
+
+    def has_change_permission(self, request, obj=None):
+        return self.can_edit(request, obj)
+
+    def has_delete_permission(self, request, obj=None):
+        return self.can_edit(request, obj)
+
+    def get_formset(self, request, obj=None, **kwargs):
+        from .models import PreparationProtocolComponent
+        from django.db.models import F
+
+        recipe_id = obj.recipe_id if obj is not None else None
+
+        class ComponentForm(forms.ModelForm):
+            class Meta:
+                model = Component
+                fields = (
+                    "recipe_component",
+                    "lot",
+                    "qty",
+                )
+
+            def __init__(self, *args, **form_kwargs):
+                super().__init__(*args, **form_kwargs)
+                editable_fields = {
+                    "recipe_component",
+                    "lot",
+                    "qty",
+                }
+
+                if not editable_fields.issubset(self.fields):
+                    return
+
+                recipe_components = (
+                    PreparationProtocolComponent.objects
+                    .filter(protocol_id=recipe_id)
+                    .order_by("position", "pk")
+                )
+
+                self.fields["recipe_component"].queryset = (
+                    recipe_components
+                )
+                self.fields["recipe_component"].required = True
+
+                lots = Lot.objects.filter(
+                    allowed_recipe_components__protocol_id=recipe_id,
+                    released=True,
+                    quantity__gt=F("reserved"),
+                ).filter(
+                    Q(expiry__isnull=True)
+                    | Q(expiry__gte=timezone.localdate())
+                ).distinct()
+
+                selected_id = self.instance.recipe_component_id
+
+                if self.is_bound:
+                    raw_id = self.data.get(
+                        self.add_prefix("recipe_component")
+                    )
+                    selected_id = (
+                        int(raw_id)
+                        if str(raw_id or "").isdigit()
+                        else None
+                    )
+
+                if selected_id:
+                    lots = lots.filter(
+                        allowed_recipe_components__pk=selected_id
+                    )
+
+                self.fields["lot"].queryset = lots.order_by(
+                    "name", "expiry", "pk"
+                )
+
+                self.fields["lot"].label_from_instance = (
+                    lambda lot: (
+                        f"{lot.name} | {lot.code} | "
+                        f"доступно: {lot.free} {lot.unit} | "
+                        f"годен до: {lot.expiry or 'не указан'}"
+                    )
+                )
+
+                self.fields["qty"].help_text = (
+                    "Фактический расход в единице выбранной "
+                    "складской партии."
+                )
+
+        kwargs["form"] = ComponentForm
+
+        return super().get_formset(request, obj, **kwargs)
 
 @admin.action(description="Допустить выбранные готовые партии")
 def approve_preparations(modeladmin, request, queryset):
     if not lead(request.user):
         raise PermissionDenied
+    ids = list(queryset.values_list("pk", flat=True)[:2])
+    if len(ids) != 1:
+        modeladmin.message_user(
+            request, "Для допуска выберите ровно одно приготовление.",
+            messages.WARNING,
+        )
+        return
+    preparation = Preparation.objects.get(pk=ids[0])
+    try:
+        preparation.approve(request.user)
+    except ValidationError as exc:
+        modeladmin.message_user(
+            request, "Допуск запрещён: " + " ".join(exc.messages),
+            messages.ERROR,
+        )
+        return
+    modeladmin.message_user(
+        request, f"Партия {preparation.output.code} допущена к использованию.",
+        messages.SUCCESS,
+    )
 
-    for pk in queryset.values_list("pk", flat=True):
+@admin.action(
+    description="Провести приготовление и оприходовать результат",
+    permissions=["change"],
+)
+def complete_preparation(modeladmin, request, queryset):
+    selected_ids = list(queryset.values_list("pk", flat=True)[:2])
+
+    if len(selected_ids) != 1:
+        modeladmin.message_user(
+            request,
+            "Для проведения выберите ровно одно приготовление.",
+            level=messages.WARNING,
+        )
+        return
+
+    try:
         with transaction.atomic():
-            p = Preparation.objects.select_for_update().get(pk=pk)
-            if not p.processed or p.approved_at:
+            preparation = (
+                Preparation.objects
+                .select_for_update()
+                .get(pk=selected_ids[0])
+            )
+
+            if not modeladmin.has_change_permission(
+                request, preparation
+            ):
                 modeladmin.message_user(
                     request,
-                    f"{p}: уже допущена либо ещё не проведена.",
-                    messages.WARNING,
+                    "Нет права на проведение этой записи, "
+                    "либо она уже проведена.",
+                    level=messages.ERROR,
                 )
-                continue
-            if p.actor_id == request.user.pk:
-                modeladmin.message_user(
-                    request,
-                    f"{p}: собственную подготовку допускает другой руководитель.",
-                    messages.ERROR,
-                )
-                continue
+                return
 
-            lot = Lot.objects.select_for_update().get(pk=p.output_id)
-            if lot.expired:
-                modeladmin.message_user(
-                    request, f"{p}: срок годности истёк.", messages.ERROR
-                )
-                continue
+            preparation.complete()
+            preparation.refresh_from_db()
 
-            p.approved_by = request.user
-            p.approved_at = timezone.now()
-            p.save(update_fields=["approved_by", "approved_at"])
-            lot.released = True
-            lot.save(update_fields=["released"])
-            audit(request.user, p, "Допуск готовой партии")
+            audit(
+                request.user,
+                preparation,
+                "Проведение приготовления: списание компонентов "
+                "и приход готовой партии",
+            )
 
+            output_code = preparation.output.code
+
+    except ValidationError as exc:
+        modeladmin.message_user(
+            request,
+            "Приготовление не проведено: "
+            + " ".join(exc.messages),
+            level=messages.ERROR,
+        )
+        return
+
+    modeladmin.message_user(
+        request,
+        f"Приготовление проведено. "
+        f"Готовая партия: {output_code}. "
+        "Партия ожидает допуска к использованию.",
+        level=messages.SUCCESS,
+    )
 
 @admin.register(Preparation)
 class PreparationAdmin(CaptureAdmin):
     list_display = (
-        "actual_day", "kind", "output", "qty", "actor",
-        "processed", "approved_by", "approved_at"
+        "actual_day",
+        "recipe",
+        "output",
+        "actual_volume_ml",
+        "actor",
+        "processed",
+        "approved_by",
     )
-    list_filter = ("kind", "actual_day", "actor", "processed")
-    search_fields = ("output__code", "protocol", "note")
+
+    list_filter = (
+        "processed",
+        "actual_day",
+        "actor",
+        "kind",
+    )
+
+    search_fields = (
+        "output__code",
+        "output__name",
+        "recipe__title",
+        "recipe__product__name",
+        "protocol",
+        "note",
+    )
+
+    list_select_related = (
+        "recipe",
+        "recipe__product",
+        "output",
+        "actor",
+    )
+
     readonly_fields = (
-        "actor", "created_at", "processed",
-        "approved_by", "approved_at"
+        "kind",
+        "protocol",
+        "output",
+        "qty",
+        "actor",
+        "created_at",
+        "processed",
+        "approved_by",
+        "approved_at",
+        "autoclaving_required",
+        "approved_cycle",
     )
-    inlines = [ComponentInline]
-    actions = [approve_preparations, export_csv]
+
+    fields = (
+        "actual_day",
+        "recipe",
+        "planned_volume_ml",
+        "actual_volume_ml",
+        "output_category",
+        "output_storage_place",
+        "output_expiry",
+        "note",
+        "kind",
+        "protocol",
+        "output",
+        "qty",
+        "actor",
+        "created_at",
+        "processed",
+        "approved_by",
+        "approved_at",
+        "autoclaving_required",
+        "approved_cycle",
+    )
+
+    inlines = (ComponentInline,)
+    actions = (
+        complete_preparation,
+        approve_preparations,
+        export_csv,
+    )
+
+    def get_actions(self, request):
+        actions = super().get_actions(request)
+        if not lead(request.user):
+            actions.pop("approve_preparations", None)
+        return actions
 
     def has_add_permission(self, request):
         return request.user.is_active and request.user.is_staff
 
+    def has_change_permission(self, request, obj=None):
+        if not request.user.is_active or not request.user.is_staff:
+            return False
+
+        if obj is None:
+            return True
+
+        if obj.processed:
+            return False
+
+        if obj.kind != "Приготовление реактива":
+            return False
+
+        return (
+            obj.actor_id == request.user.pk
+            or lead(request.user)
+        )
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+    def get_form(self, request, obj=None, **kwargs):
+        base = super().get_form(request, obj, **kwargs)
+
+        class PreparationForm(base):
+            def __init__(self, *args, **form_kwargs):
+                super().__init__(*args, **form_kwargs)
+
+                required_fields = (
+                    "recipe",
+                    "planned_volume_ml",
+                    "actual_volume_ml",
+                    "output_category",
+                    "output_storage_place",
+                )
+
+                for name in required_fields:
+                    if name in self.fields:
+                        self.fields[name].required = True
+
+        return PreparationForm
+
     def get_inline_instances(self, request, obj=None):
-        if obj is not None:
+        if obj is None:
             return []
+
         return super().get_inline_instances(request, obj)
 
-    def save_related(self, request, form, formsets, change):
-        super().save_related(request, form, formsets, change)
-        if not change:
-            form.instance.complete()
+    def get_readonly_fields(self, request, obj=None):
+        fields = list(super().get_readonly_fields(request, obj))
+
+        if obj is not None and obj.components.exists():
+            fields.append("recipe")
+
+        return tuple(dict.fromkeys(fields))
+
+    def save_model(self, request, obj, form, change):
+        if change:
+            current = (
+                Preparation.objects
+                .select_for_update()
+                .get(pk=obj.pk)
+            )
+            if not self.has_change_permission(request, current):
+                raise PermissionDenied
+
+        obj.kind = "Приготовление реактива"
+
+        if not obj.recipe_id or obj.actual_volume_ml is None:
+            raise ValidationError(
+                "Укажите протокол и фактический объём."
+            )
+
+        obj.protocol = str(obj.recipe)[:240]
+        obj.qty = obj.actual_volume_ml
+
+        super().save_model(request, obj, form, change)
 
 
 @admin.action(description="Утвердить выбранные отчёты")
@@ -568,6 +867,310 @@ class AuditAdmin(ReadOnlyAdmin):
 from .models import BufferName
 
 
+class BufferNameAdmin(StockDictionaryAdmin):
+    list_display = (
+        "name",
+        "kind",
+        "concentration",
+        "requires_autoclaving",
+        "shelf_life_days",
+        "active",
+    )
+
+    list_filter = (
+        "kind",
+        "requires_autoclaving",
+        "active",
+    )
+
+    search_fields = (
+        "name",
+        "concentration",
+    )
+
+    fields = (
+        "name",
+        "kind",
+        "concentration",
+        "storage_conditions",
+        "shelf_life_days",
+        "requires_autoclaving",
+        "active",
+        "sort_order",
+    )
+
+
 if not admin.site.is_registered(BufferName):
-    admin.site.register(BufferName, StockDictionaryAdmin)
+    admin.site.register(BufferName, BufferNameAdmin)
+
+
+from .models import (
+    PreparationProtocol,
+    PreparationProtocolComponent,
+)
+
+
+class PreparationProtocolComponentInline(admin.StackedInline):
+    model = PreparationProtocolComponent
+    extra = 1
+
+    fields = (
+        "position",
+        "reagent_name",
+        "source_concentration",
+        "quantity",
+        "unit",
+        "to_final_volume",
+        "final_concentration",
+        "allowed_lots",
+        "note",
+    )
+
+    filter_horizontal = ("allowed_lots",)
+
+    def has_add_permission(self, request, obj=None):
+        if not lead(request.user):
+            return False
+
+        return obj is None or not obj.preparations.exists()
+
+    def has_change_permission(self, request, obj=None):
+        if not lead(request.user):
+            return False
+
+        return obj is None or not obj.preparations.exists()
+
+    def has_delete_permission(self, request, obj=None):
+        if not lead(request.user):
+            return False
+
+        return obj is None or not obj.preparations.exists()
+
+
+@admin.register(PreparationProtocol)
+class PreparationProtocolAdmin(CaptureAdmin):
+    capture_actor = False
+
+    list_display = (
+        "title",
+        "product",
+        "version",
+        "base_volume_ml",
+        "active",
+        "created_at",
+    )
+
+    list_filter = (
+        "active",
+        "product",
+    )
+
+    search_fields = (
+        "title",
+        "version",
+        "product__name",
+        "product__concentration",
+    )
+
+    list_select_related = ("product",)
+
+    readonly_fields = ("created_at",)
+
+    fields = (
+        "product",
+        "title",
+        "version",
+        "base_volume_ml",
+        "instructions",
+        "target_ph",
+        "processing_notes",
+        "active",
+        "created_at",
+    )
+
+    inlines = (PreparationProtocolComponentInline,)
+
+    def has_add_permission(self, request):
+        return lead(request.user)
+
+    def has_change_permission(self, request, obj=None):
+        if not lead(request.user):
+            return False
+
+        return obj is None or not obj.preparations.exists()
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+    def save_model(self, request, obj, form, change):
+        if not lead(request.user):
+            raise PermissionDenied
+
+        if change:
+            with transaction.atomic():
+                current = (
+                    PreparationProtocol.objects
+                    .select_for_update()
+                    .get(pk=obj.pk)
+                )
+
+                if current.preparations.exists():
+                    raise ValidationError(
+                        "Протокол уже используется в приготовлениях. "
+                        "Для изменения состава создайте новую версию."
+                    )
+
+                super().save_model(
+                    request, obj, form, change
+                )
+        else:
+            super().save_model(
+                request, obj, form, change
+            )
+
+from .models import Autoclaving, AutoclavingItem
+
+
+class AutoclavingItemInline(admin.TabularInline):
+    model = AutoclavingItem
+    extra = 1
+    fields = ("lot", "description", "quantity", "unit", "note")
+
+    def has_view_permission(self, request, obj=None):
+        return request.user.is_active and request.user.is_staff
+
+    def can_edit(self, request, obj):
+        if not request.user.is_active or not request.user.is_staff:
+            return False
+        if obj is None:
+            return True
+        return (
+            obj.status == Autoclaving.Status.DRAFT
+            and (obj.actor_id == request.user.pk or lead(request.user))
+        )
+
+    def has_add_permission(self, request, obj=None):
+        return self.can_edit(request, obj)
+
+    def has_change_permission(self, request, obj=None):
+        return self.can_edit(request, obj)
+
+    def has_delete_permission(self, request, obj=None):
+        return self.can_edit(request, obj)
+
+
+def finalize_autoclaving(modeladmin, request, queryset, target_status):
+    ids = list(queryset.values_list("pk", flat=True)[:2])
+    if len(ids) != 1:
+        modeladmin.message_user(
+            request, "Выберите ровно один цикл.", messages.WARNING
+        )
+        return
+
+    try:
+        with transaction.atomic():
+            cycle = Autoclaving.objects.select_for_update().get(pk=ids[0])
+            if not modeladmin.has_change_permission(request, cycle):
+                raise ValidationError(
+                    "Нет права завершить цикл либо он уже закрыт."
+                )
+            cycle.full_clean()
+            items = list(cycle.items.all())
+            if not items:
+                raise ValidationError("Укажите состав загрузки.")
+            for item in items:
+                item.full_clean()
+            if not cycle.control_result.strip():
+                raise ValidationError("Запишите результат контроля цикла.")
+            if target_status == Autoclaving.Status.COMPLETED:
+                if (
+                    cycle.temperature_c is None
+                    or cycle.holding_time_min is None
+                ):
+                    raise ValidationError(
+                        "Укажите температуру и время выдержки."
+                    )
+            elif not cycle.note.strip():
+                raise ValidationError(
+                    "В замечаниях опишите причину неуспешного цикла."
+                )
+            cycle.status = target_status
+            cycle.save(update_fields=["status"])
+            audit(
+                request.user, cycle,
+                "Закрытие цикла: " + cycle.get_status_display(),
+            )
+    except ValidationError as exc:
+        modeladmin.message_user(
+            request, " ".join(exc.messages), messages.ERROR
+        )
+        return
+
+    modeladmin.message_user(
+        request,
+        "Цикл закрыт. Остатки и допуск складских партий не изменены.",
+        messages.SUCCESS,
+    )
+
+
+@admin.action(description="Закрыть цикл: завершён", permissions=["change"])
+def complete_autoclaving(modeladmin, request, queryset):
+    finalize_autoclaving(
+        modeladmin, request, queryset, Autoclaving.Status.COMPLETED
+    )
+
+
+@admin.action(description="Закрыть цикл: неуспешен", permissions=["change"])
+def fail_autoclaving(modeladmin, request, queryset):
+    finalize_autoclaving(
+        modeladmin, request, queryset, Autoclaving.Status.FAILED
+    )
+
+
+@admin.register(Autoclaving)
+class AutoclavingAdmin(CaptureAdmin):
+    list_display = (
+        "actual_day", "equipment", "cycle_number", "protocol",
+        "temperature_c", "holding_time_min", "status", "actor",
+    )
+    list_filter = ("status", "actual_day", "equipment", "actor")
+    search_fields = (
+        "cycle_number", "equipment", "protocol", "control_result", "note",
+    )
+    readonly_fields = ("status", "actor", "created_at")
+    fields = (
+        "actual_day", "equipment", "cycle_number", "protocol",
+        "temperature_c", "holding_time_min", "control_result", "note",
+        "status", "actor", "created_at",
+    )
+    inlines = (AutoclavingItemInline,)
+    actions = (complete_autoclaving, fail_autoclaving, export_csv)
+
+    def has_add_permission(self, request):
+        return request.user.is_active and request.user.is_staff
+
+    def has_change_permission(self, request, obj=None):
+        if not request.user.is_active or not request.user.is_staff:
+            return False
+        if obj is None:
+            return True
+        return (
+            obj.status == Autoclaving.Status.DRAFT
+            and (obj.actor_id == request.user.pk or lead(request.user))
+        )
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+    def save_model(self, request, obj, form, change):
+        if change:
+            current = (
+                Autoclaving.objects.select_for_update().get(pk=obj.pk)
+            )
+            if not self.has_change_permission(request, current):
+                raise PermissionDenied
+            obj.status = current.status
+        else:
+            obj.status = Autoclaving.Status.DRAFT
+        super().save_model(request, obj, form, change)
 

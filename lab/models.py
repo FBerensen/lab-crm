@@ -66,6 +66,50 @@ def positive():
     )
 
 
+def convert_preparation_quantity(value, from_unit, to_unit):
+    units = {
+        "l": ("volume", Decimal("1000")),
+        "л": ("volume", Decimal("1000")),
+        "ml": ("volume", Decimal("1")),
+        "мл": ("volume", Decimal("1")),
+        "ul": ("volume", Decimal("0.001")),
+        "мкл": ("volume", Decimal("0.001")),
+
+        "kg": ("mass", Decimal("1000")),
+        "кг": ("mass", Decimal("1000")),
+        "g": ("mass", Decimal("1")),
+        "г": ("mass", Decimal("1")),
+        "mg": ("mass", Decimal("0.001")),
+        "мг": ("mass", Decimal("0.001")),
+        "ug": ("mass", Decimal("0.000001")),
+        "мкг": ("mass", Decimal("0.000001")),
+    }
+
+    if from_unit not in units or to_unit not in units:
+        raise ValidationError(
+            f"Не поддерживается перевод единиц: "
+            f"{from_unit} → {to_unit}."
+        )
+
+    source_group, source_factor = units[from_unit]
+    target_group, target_factor = units[to_unit]
+
+    if source_group != target_group:
+        raise ValidationError(
+            "Нельзя автоматически переводить массу в объём "
+            "или объём в массу."
+        )
+
+    amount = Decimal(str(value))
+
+    if not amount.is_finite() or amount <= 0:
+        raise ValidationError(
+            "Количество для пересчёта должно быть "
+            "положительным конечным числом."
+        )
+
+    return amount * source_factor / target_factor
+
 class Stamp(models.Model):
     actor = fk(USER, "Кто внёс запись")
     created_at = models.DateTimeField("Когда внесено", auto_now_add=True)
@@ -74,17 +118,372 @@ class Stamp(models.Model):
         abstract = True
 
 class BufferName(models.Model):
-    name = models.CharField("Название буфера", max_length=240, unique=True)
-    active = models.BooleanField("Активен", default=True)
-    sort_order = models.PositiveIntegerField("Порядок", default=100)
+    class Kind(models.TextChoices):
+        BUFFER = "buffer", "Буфер"
+        SOLUTION = "solution", "Раствор"
+
+    name = models.CharField(
+        "Название раствора или буфера",
+        max_length=240,
+        unique=True,
+    )
+
+    kind = models.CharField(
+        "Тип",
+        max_length=20,
+        choices=Kind.choices,
+        blank=True,
+        default="",
+        help_text="Для существующих записей выберите тип вручную.",
+    )
+
+    concentration = models.CharField(
+        "Концентрация / обозначение состава",
+        max_length=120,
+        blank=True,
+        help_text=(
+            "Например: 1 М, 70 % об./об., 10×. "
+            "На этом этапе поле используется для описания, "
+            "а не для автоматического расчёта."
+        ),
+    )
+
+    storage_conditions = models.TextField(
+        "Условия хранения",
+        blank=True,
+    )
+
+    shelf_life_days = models.PositiveIntegerField(
+        "Срок годности после приготовления, дней",
+        null=True,
+        blank=True,
+        validators=[MinValueValidator(1)],
+        help_text=(
+            "Оставьте пустым, если срок задаётся отдельно "
+            "для каждой приготовленной партии."
+        ),
+    )
+
+    requires_autoclaving = models.BooleanField(
+        "Требуется автоклавирование после приготовления",
+        default=False,
+        help_text=(
+            "Отметьте, если это предусмотрено протоколом. "
+            "Не является отметкой о выполненной обработке."
+        ),
+    )
+
+    active = models.BooleanField(
+        "Активен",
+        default=True,
+    )
+
+    sort_order = models.PositiveIntegerField(
+        "Порядок",
+        default=100,
+    )
 
     def __str__(self):
+        if self.concentration:
+            return f"{self.name} — {self.concentration}"
         return self.name
 
     class Meta:
-        verbose_name = "Название буфера"
-        verbose_name_plural = "Названия буферов"
+        verbose_name = "Раствор или буфер"
+        verbose_name_plural = "Растворы и буферы"
         ordering = ["sort_order", "name"]
+
+class PreparationProtocol(models.Model):
+    product = models.ForeignKey(
+        BufferName,
+        on_delete=models.PROTECT,
+        verbose_name="Раствор или буфер",
+        related_name="preparation_protocols",
+    )
+
+    title = models.CharField(
+        "Название протокола",
+        max_length=240,
+    )
+
+    version = models.CharField(
+        "Версия",
+        max_length=40,
+        default="1",
+    )
+
+    base_volume_ml = models.DecimalField(
+        "Конечный объём по протоколу, мл",
+        max_digits=16,
+        decimal_places=4,
+        validators=[MinValueValidator(Decimal("0.0001"))],
+        help_text=(
+            "Конечный объём готового раствора, "
+            "на который рассчитаны количества компонентов."
+        ),
+    )
+
+    instructions = models.TextField(
+        "Порядок приготовления",
+        help_text=(
+            "Последовательность добавления компонентов, "
+            "растворение и доведение до конечного объёма."
+        ),
+    )
+
+    target_ph = models.CharField(
+        "Требования к pH",
+        max_length=120,
+        blank=True,
+        help_text="Целевое значение или диапазон, если применимо.",
+    )
+
+    processing_notes = models.TextField(
+        "Фильтрация, стерилизация и особые условия",
+        blank=True,
+        help_text=(
+            "Требования протокола к обработке. "
+            "Это инструкция, а не запись о выполненной процедуре."
+        ),
+    )
+
+    active = models.BooleanField(
+        "Доступен для новых приготовлений",
+        default=True,
+    )
+
+    created_at = models.DateTimeField(
+        "Дата создания",
+        auto_now_add=True,
+    )
+
+    def __str__(self):
+        return f"{self.title} / версия {self.version} / {self.product}"
+
+    class Meta:
+        verbose_name = "Протокол приготовления"
+        verbose_name_plural = "Протоколы приготовления"
+        ordering = ["product__name", "title", "version"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["product", "title", "version"],
+                name="unique_prep_protocol_version",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(base_volume_ml__gt=0),
+                name="prep_protocol_volume_positive",
+            ),
+        ]
+
+class PreparationProtocolComponent(models.Model):
+    class Unit(models.TextChoices):
+        GRAM = "g", "г"
+        MILLIGRAM = "mg", "мг"
+        LITRE = "l", "л"
+        MILLILITRE = "ml", "мл"
+        MICROLITRE = "ul", "мкл"
+
+    protocol = models.ForeignKey(
+        PreparationProtocol,
+        on_delete=models.PROTECT,
+        verbose_name="Протокол приготовления",
+        related_name="recipe_components",
+    )
+
+    position = models.PositiveIntegerField(
+        "Порядок добавления",
+        default=10,
+    )
+
+    reagent_name = models.CharField(
+        "Компонент / реактив",
+        max_length=240,
+        help_text=(
+            "Название требуемого компонента. "
+            "Конкретная складская партия выбирается "
+            "при фактическом приготовлении."
+        ),
+    )
+
+    allowed_lots = models.ManyToManyField(
+        "Lot",
+        verbose_name="Допустимые складские партии",
+        related_name="allowed_recipe_components",
+        blank=True,
+        help_text=(
+            "Партии, разрешённые для этого компонента. "
+            "При приготовлении дополнительно проверяются "
+            "остаток, срок годности и допуск к использованию. "
+            "Пустой список не разрешает использовать любые партии."
+        ),
+    )
+
+    source_concentration = models.CharField(
+        "Требуемая концентрация исходного компонента",
+        max_length=120,
+        blank=True,
+        help_text=(
+            "Укажите для исходного раствора. "
+            "Для сухого реактива можно оставить пустым."
+        ),
+    )
+
+    quantity = models.DecimalField(
+        "Количество на базовый объём протокола",
+        max_digits=16,
+        decimal_places=4,
+        null=True,
+        blank=True,
+        validators=[MinValueValidator(Decimal("0.0001"))],
+    )
+
+    unit = models.CharField(
+        "Единица количества",
+        max_length=10,
+        choices=Unit.choices,
+    )
+
+    to_final_volume = models.BooleanField(
+        "Довести до конечного объёма",
+        default=False,
+        help_text=(
+            "Для растворителя, добавляемого до конечного "
+            "объёма. В этом случае количество оставьте пустым."
+        ),
+    )
+
+    final_concentration = models.CharField(
+        "Конечная концентрация компонента",
+        max_length=120,
+        blank=True,
+        help_text=(
+            "Информационное поле. Не заменяет указание "
+            "количества для фиксированной дозировки."
+        ),
+    )
+
+    note = models.TextField(
+        "Указания по добавлению",
+        blank=True,
+    )
+
+    def available_lots(self):
+        if self.pk is None:
+            return Lot.objects.none()
+
+        return (
+            self.allowed_lots
+            .filter(
+                released=True,
+                quantity__gt=models.F("reserved"),
+            )
+            .filter(
+                models.Q(expiry__isnull=True)
+                | models.Q(expiry__gte=timezone.localdate())
+            )
+            .order_by("expiry", "pk")
+        )
+    def required_quantity(self, volume_ml, target_unit=None):
+        """
+        Плановое количество компонента на заданный объём.
+
+        Если target_unit не указан, результат возвращается
+        в единице компонента рецептуры.
+
+        Для доведения до конечного объёма возвращается None:
+        фактический расход растворителя фиксируется отдельно.
+        """
+        volume = Decimal(str(volume_ml))
+
+        if not volume.is_finite() or volume <= 0:
+            raise ValidationError(
+                "Объём приготовления должен быть "
+                "положительным конечным числом."
+            )
+
+        base_volume = self.protocol.base_volume_ml
+
+        if base_volume is None or base_volume <= 0:
+            raise ValidationError(
+                "В протоколе должен быть указан "
+                "положительный базовый объём."
+            )
+
+        self.full_clean()
+
+        if self.to_final_volume:
+            return None
+
+        required = self.quantity * volume / base_volume
+
+        if target_unit is not None:
+            required = convert_preparation_quantity(
+                required,
+                self.unit,
+                target_unit,
+            )
+
+        return required
+
+    def clean(self):
+        super().clean()
+
+        if self.to_final_volume:
+            if self.quantity is not None:
+                raise ValidationError({
+                    "quantity": (
+                        "Для доведения до конечного объёма "
+                        "оставьте количество пустым."
+                    ),
+                })
+
+            if self.unit not in (
+                self.Unit.LITRE,
+                self.Unit.MILLILITRE,
+                self.Unit.MICROLITRE,
+            ):
+                raise ValidationError({
+                    "unit": (
+                        "Для доведения до конечного объёма "
+                        "выберите единицу объёма."
+                    ),
+                })
+
+        elif self.quantity is None:
+            raise ValidationError({
+                "quantity": "Укажите количество компонента.",
+            })
+
+    def __str__(self):
+        if self.to_final_volume:
+            return f"{self.reagent_name} — до конечного объёма"
+
+        return (
+            f"{self.reagent_name} — "
+            f"{self.quantity} {self.get_unit_display()}"
+        )
+
+    class Meta:
+        verbose_name = "Компонент протокола"
+        verbose_name_plural = "Компоненты протокола"
+        ordering = ["position", "pk"]
+        constraints = [
+            models.CheckConstraint(
+                condition=(
+                    models.Q(
+                        to_final_volume=False,
+                        quantity__isnull=False,
+                        quantity__gt=0,
+                    )
+                    | models.Q(
+                        to_final_volume=True,
+                        quantity__isnull=True,
+                        unit__in=["l", "ml", "ul"],
+                    )
+                ),
+                name="recipe_component_quantity_valid",
+            ),
+        ]
 
 class Dated(Stamp):
     actual_day = models.DateField(
@@ -676,19 +1075,86 @@ class Movement(Dated):
 
 class Preparation(Dated):
     kind = models.CharField(
-        "Вид подготовки", max_length=40,
+        "Вид подготовки",
+        max_length=40,
         choices=[(x, x) for x in (
-            "Приготовление реактива", "Автоклавирование расходников"
-        )]
+            "Приготовление реактива",
+            "Автоклавирование расходников",
+        )],
     )
+
     output = models.OneToOneField(
-        Lot, on_delete=models.PROTECT,
+        Lot,
+        on_delete=models.PROTECT,
         verbose_name="Готовая партия",
         related_name="production_record",
+        null=True,
+        blank=True,
+        help_text="Создаётся автоматически при проведении.",
     )
+
+    output_category = models.ForeignKey(
+        ProductCategory,
+        on_delete=models.PROTECT,
+        verbose_name="Категория готовой партии",
+        related_name="+",
+        null=True,
+        blank=True,
+    )
+
+    output_storage_place = models.ForeignKey(
+        StoragePlace,
+        on_delete=models.PROTECT,
+        verbose_name="Место хранения готовой партии",
+        related_name="+",
+        null=True,
+        blank=True,
+    )
+
+    output_expiry = models.DateField(
+        "Срок годности готовой партии",
+        null=True,
+        blank=True,
+        help_text=(
+            "Последний день использования. "
+            "Если не указан, срок можно рассчитать "
+            "по справочнику растворов и буферов."
+        ),
+    )
+
     qty = positive()
     protocol = models.CharField(
         "СОП / протокол / идентификатор цикла", max_length=240
+    )
+    recipe = models.ForeignKey(
+        PreparationProtocol,
+        on_delete=models.PROTECT,
+        verbose_name="Протокол приготовления",
+        related_name="preparations",
+        null=True,
+        blank=True,
+        help_text=(
+            "Рецептура для приготовления раствора или буфера. "
+            "Для старых записей может быть не указана."
+        ),
+    )
+
+    planned_volume_ml = models.DecimalField(
+        "Планируемый конечный объём, мл",
+        max_digits=16,
+        decimal_places=4,
+        null=True,
+        blank=True,
+        validators=[MinValueValidator(Decimal("0.0001"))],
+    )
+
+    actual_volume_ml = models.DecimalField(
+        "Фактический конечный объём, мл",
+        max_digits=16,
+        decimal_places=4,
+        null=True,
+        blank=True,
+        validators=[MinValueValidator(Decimal("0.0001"))],
     )
     note = models.TextField("Результат и замечания", blank=True)
     processed = models.BooleanField("Проведено по складу", default=False)
@@ -698,6 +1164,24 @@ class Preparation(Dated):
     )
     approved_at = models.DateTimeField(
         "Дата допуска", null=True, blank=True
+    )
+
+    autoclaving_required = models.BooleanField(
+        "Требовалось автоклавирование при приготовлении",
+        null=True,
+        default=None,
+        editable=False,
+        help_text="Фиксируется при проведении. Пусто — историческая запись без снимка требования.",
+    )
+
+    approved_cycle = models.ForeignKey(
+        "Autoclaving",
+        on_delete=models.PROTECT,
+        verbose_name="Цикл, учтённый при допуске",
+        related_name="approved_preparations",
+        null=True,
+        blank=True,
+        editable=False,
     )
 
     def complete(self):
@@ -710,6 +1194,85 @@ class Preparation(Dated):
             if not components:
                 raise ValidationError("Добавьте исходные партии.")
 
+            if not p.output_id:
+                if not p.recipe_id:
+                    raise ValidationError(
+                        "Выберите протокол приготовления."
+                    )
+
+                if (
+                    p.actual_volume_ml is None
+                    or p.actual_volume_ml <= 0
+                ):
+                    raise ValidationError(
+                        "Укажите положительный фактический "
+                        "объём готового раствора."
+                    )
+
+                if not p.output_category_id:
+                    raise ValidationError(
+                        "Выберите категорию готовой партии."
+                    )
+
+                if not p.output_storage_place_id:
+                    raise ValidationError(
+                        "Выберите место хранения готовой партии."
+                    )
+
+                if not p.output_category.active:
+                    raise ValidationError(
+                        "Выбранная категория неактивна."
+                    )
+
+                if not p.output_storage_place.active:
+                    raise ValidationError(
+                        "Выбранное место хранения неактивно."
+                    )
+
+                expiry = p.output_expiry
+                product = p.recipe.product
+
+                if expiry is None and product.shelf_life_days:
+                    from datetime import timedelta
+
+                    expiry = (
+                        p.actual_day
+                        + timedelta(days=product.shelf_life_days)
+                    )
+
+                if expiry is not None:
+                    if expiry < p.actual_day:
+                        raise ValidationError(
+                            "Срок годности не может быть раньше "
+                            "даты приготовления."
+                        )
+
+                    if expiry < timezone.localdate():
+                        raise ValidationError(
+                            "Срок годности готовой партии "
+                            "уже истёк."
+                        )
+
+                new_output = Lot(
+                    category=p.output_category,
+                    name=str(product),
+                    unit="мл",
+                    storage_place=p.output_storage_place,
+                    expiry=expiry,
+                    initial_quantity=Decimal("0"),
+                    quantity=Decimal("0"),
+                    reserved=Decimal("0"),
+                    released=False,
+                )
+
+                new_output.full_clean()
+                new_output.save()
+
+                p.output = new_output
+                p.qty = p.actual_volume_ml
+
+                p.save(update_fields=["output", "qty"])
+
             ids = sorted({p.output_id, *[c.lot_id for c in components]})
             locked = {
                 x.pk: x
@@ -717,6 +1280,138 @@ class Preparation(Dated):
                 .filter(pk__in=ids).order_by("pk")
             }
             output = locked[p.output_id]
+            # Новые проведения выполняются по рецептуре.
+            if p.kind != "Приготовление реактива":
+                raise ValidationError(
+                    "Для автоклавирования используйте отдельный "
+                    "журнал. Эта операция предназначена "
+                    "для приготовления растворов и буферов."
+                )
+
+            if not p.recipe_id:
+                raise ValidationError(
+                    "Выберите протокол приготовления."
+                )
+
+            recipe = p.recipe
+
+            if not recipe.active or not recipe.product.active:
+                raise ValidationError(
+                    "Выбранный протокол или готовый продукт "
+                    "недоступен для новых приготовлений."
+                )
+
+            if (
+                p.planned_volume_ml is None
+                or p.planned_volume_ml <= 0
+                or p.actual_volume_ml is None
+                or p.actual_volume_ml <= 0
+            ):
+                raise ValidationError(
+                    "Укажите положительные планируемый "
+                    "и фактический конечные объёмы."
+                )
+            expected_output_qty = convert_preparation_quantity(
+                p.actual_volume_ml,
+                "ml",
+                output.unit,
+            )
+
+            if expected_output_qty != expected_output_qty.quantize(
+                Decimal("0.0001")
+            ):
+                raise ValidationError(
+                    "Фактический объём нельзя точно записать "
+                    "в выбранной складской единице с точностью "
+                    "до четырёх знаков после запятой. "
+                    "Выберите более мелкую единицу учёта "
+                    "для готовой партии."
+                )
+
+            if p.qty != expected_output_qty:
+                raise ValidationError(
+                    "Количество готовой партии не соответствует "
+                    "фактическому объёму. "
+                    f"Для {p.actual_volume_ml} мл укажите "
+                    f"{expected_output_qty} {output.unit}."
+                )
+
+            required_ids = set(
+                recipe.recipe_components.values_list(
+                    "pk", flat=True
+                )
+            )
+
+            if not required_ids:
+                raise ValidationError(
+                    "В выбранном протоколе нет компонентов."
+                )
+
+            used_ids = set()
+            totals_by_lot = {}
+
+            for c in components:
+                # Проверяет количество, связи и допустимую партию.
+                c.full_clean()
+
+                if not c.recipe_component_id:
+                    raise ValidationError(
+                        "Для каждой строки расхода выберите "
+                        "компонент рецептуры."
+                    )
+
+                if c.recipe_component_id not in required_ids:
+                    raise ValidationError(
+                        "В расходе есть компонент "
+                        "другого протокола."
+                    )
+
+                if c.lot_id == p.output_id:
+                    raise ValidationError(
+                        "Готовая партия не может быть "
+                        "собственным компонентом."
+                    )
+
+                                              # Проверяем совместимость единиц.
+                convert_preparation_quantity(
+                    c.qty,
+                    locked[c.lot_id].unit,
+                    c.recipe_component.unit,
+                )
+
+                used_ids.add(c.recipe_component_id)
+
+                totals_by_lot[c.lot_id] = (
+                    totals_by_lot.get(c.lot_id, Decimal("0"))
+                    + c.qty
+                )
+
+            if required_ids - used_ids:
+                raise ValidationError(
+                    "Укажите фактический расход для каждого "
+                    "компонента протокола, включая растворитель."
+                )
+
+            for lot_id, total_qty in totals_by_lot.items():
+                lot = locked[lot_id]
+
+                if not lot.released:
+                    raise ValidationError(
+                        f"Партия «{lot}» не допущена "
+                        "к использованию."
+                    )
+
+                if lot.expired:
+                    raise ValidationError(
+                        f"Срок годности партии «{lot}» истёк."
+                    )
+
+                if total_qty > lot.free:
+                    raise ValidationError(
+                        f"Недостаточно партии «{lot}». "
+                        f"Требуется: {total_qty} {lot.unit}; "
+                        f"доступно: {lot.free} {lot.unit}."
+                    )
 
             if output.quantity != 0 or output.reserved != 0:
                 raise ValidationError(
@@ -754,10 +1449,119 @@ class Preparation(Dated):
                 preparation=p,
                 note=f"Получено при подготовке: {p.protocol}",
             )
-            Preparation.objects.filter(pk=p.pk).update(processed=True)
+            Preparation.objects.filter(pk=p.pk).update(
+                processed=True,
+                autoclaving_required=bool(recipe.product.requires_autoclaving),
+            )
+
+    def approve(self, user):
+        with transaction.atomic():
+            if not lead(user):
+                raise ValidationError("Допуск выполняет руководитель.")
+
+            p = Preparation.objects.select_for_update().get(pk=self.pk)
+            if not p.processed or not p.output_id:
+                raise ValidationError("Сначала проведите приготовление.")
+            if p.approved_at is not None:
+                raise ValidationError("Партия уже допущена.")
+            if p.actor_id == user.pk:
+                raise ValidationError(
+                    "Собственную подготовку допускает другой руководитель."
+                )
+            if p.autoclaving_required is None:
+                raise ValidationError(
+                    "Историческая запись: требование автоклавирования "
+                    "не было зафиксировано. Нужна отдельная проверка; "
+                    "автоматический допуск запрещён."
+                )
+
+            lot = Lot.objects.select_for_update().get(pk=p.output_id)
+            if lot.expired:
+                raise ValidationError("Срок годности готовой партии истёк.")
+            if lot.released:
+                raise ValidationError(
+                    "Партия уже отмечена допущенной вне этой процедуры. "
+                    "Проверьте историю склада."
+                )
+            if lot.quantity != p.qty or lot.reserved != 0:
+                raise ValidationError(
+                    "Остаток готовой партии изменён либо есть резерв. "
+                    "Допуск всей исходной партии требует отдельной проверки."
+                )
+
+            cycle = None
+            if p.autoclaving_required:
+                cycle_ids = AutoclavingItem.objects.filter(
+                    lot_id=lot.pk
+                ).values("cycle_id")
+                cycle = (
+                    Autoclaving.objects.select_for_update()
+                    .filter(pk__in=cycle_ids)
+                    .order_by("-actual_day", "-created_at", "-pk")
+                    .first()
+                )
+                if cycle is None:
+                    raise ValidationError(
+                        "Требуется зарегистрировать автоклавирование партии."
+                    )
+                if cycle.status != Autoclaving.Status.COMPLETED:
+                    raise ValidationError(
+                        "Последний зарегистрированный цикл не завершён "
+                        "успешно. Допуск запрещён."
+                    )
+                if (
+                    cycle.actual_day < p.actual_day
+                    or cycle.created_at < p.created_at
+                ):
+                    raise ValidationError(
+                        "Цикл зарегистрирован раньше приготовления."
+                    )
+                if not cycle.control_result.strip():
+                    raise ValidationError("Не указан результат контроля цикла.")
+                if (
+                    cycle.temperature_c is None
+                    or cycle.holding_time_min is None
+                ):
+                    raise ValidationError("Не заполнены параметры цикла.")
+                cycle.full_clean()
+                items = list(cycle.items.filter(lot_id=lot.pk))
+                total = Decimal("0")
+                for item in items:
+                    item.full_clean()
+                    total += item.quantity
+                if total != p.qty:
+                    raise ValidationError(
+                        "Последний цикл должен охватывать всю исходную "
+                        f"партию: {p.qty} {lot.unit}. "
+                        f"В загрузке указано: {total} {lot.unit}. "
+                        "Частичную обработку разных циклов не суммируем."
+                    )
+
+            p.approved_by = user
+            p.approved_at = timezone.now()
+            p.approved_cycle = cycle
+            p.save(update_fields=[
+                "approved_by", "approved_at", "approved_cycle",
+            ])
+            lot.released = True
+            lot.save(update_fields=["released"])
+            Audit.objects.create(
+                actor=user,
+                entity=p._meta.label,
+                object_id=str(p.pk),
+                detail=(
+                    "Допуск готовой партии; "
+                    + (f"цикл #{cycle.pk}" if cycle else "автоклавирование не требовалось")
+                ),
+            )
+        self.refresh_from_db()
 
     def __str__(self):
-        return f"{self.kind} · {self.output.code}"
+        if self.output_id:
+            return f"{self.kind} · {self.output.code}"
+
+        number = self.pk or "новое"
+        return f"{self.kind} · приготовление {number}"
 
     class Meta:
         verbose_name = "Подготовка партии"
@@ -768,11 +1572,258 @@ class Component(models.Model):
     preparation = fk(Preparation, "Подготовка", related_name="components")
     lot = fk(Lot, "Исходная партия")
     qty = positive()
+    recipe_component = models.ForeignKey(
+        PreparationProtocolComponent,
+        on_delete=models.PROTECT,
+        verbose_name="Компонент рецептуры",
+        related_name="actual_components",
+        null=True,
+        blank=True,
+        help_text=(
+            "Укажите, для какого компонента протокола "
+            "используется эта складская партия."
+        ),
+    )
+    def clean(self):
+        super().clean()
+
+        errors = {}
+
+        preparation = (
+            self.preparation
+            if self.preparation_id
+            else None
+        )
+
+        recipe_component = (
+            self.recipe_component
+            if self.recipe_component_id
+            else None
+        )
+
+        if preparation is not None:
+            if preparation.recipe_id:
+                if recipe_component is None:
+                    errors["recipe_component"] = (
+                        "Выберите компонент рецептуры."
+                    )
+                elif (
+                    recipe_component.protocol_id
+                    != preparation.recipe_id
+                ):
+                    errors["recipe_component"] = (
+                        "Этот компонент относится "
+                        "к другому протоколу."
+                    )
+
+            elif recipe_component is not None:
+                errors["recipe_component"] = (
+                    "Сначала выберите протокол "
+                    "в записи приготовления."
+                )
+
+            if (
+                self.lot_id
+                and self.lot_id == preparation.output_id
+            ):
+                errors["lot"] = (
+                    "Готовая партия не может быть "
+                    "собственным исходным компонентом."
+                )
+
+        if recipe_component is not None and self.lot_id:
+            allowed = recipe_component.allowed_lots.filter(
+                pk=self.lot_id
+            ).exists()
+
+            if not allowed:
+                errors["lot"] = (
+                    "Эта складская партия не разрешена "
+                    "для выбранного компонента рецептуры."
+                )
+
+        if errors:
+            raise ValidationError(errors)
 
     class Meta:
         verbose_name = "Исходная партия"
         verbose_name_plural = "Исходные партии и фактический расход"
 
+
+class Autoclaving(Dated):
+    class Status(models.TextChoices):
+        DRAFT = "draft", "Черновик"
+        COMPLETED = "completed", "Цикл завершён"
+        FAILED = "failed", "Цикл неуспешен"
+
+    equipment = models.CharField(
+        "Автоклав / инвентарный номер",
+        max_length=240,
+    )
+
+    cycle_number = models.CharField(
+        "Номер цикла",
+        max_length=100,
+        blank=True,
+    )
+
+    protocol = models.CharField(
+        "СОП / программа обработки",
+        max_length=240,
+    )
+
+    temperature_c = models.DecimalField(
+        "Температура выдержки, °C",
+        max_digits=6,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        validators=[MinValueValidator(Decimal("0.01"))],
+    )
+
+    holding_time_min = models.DecimalField(
+        "Время выдержки, мин",
+        max_digits=8,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        validators=[MinValueValidator(Decimal("0.01"))],
+        help_text="Продолжительность выдержки, не всего цикла.",
+    )
+
+    status = models.CharField(
+        "Статус",
+        max_length=20,
+        choices=Status.choices,
+        default=Status.DRAFT,
+    )
+
+    control_result = models.TextField(
+        "Результат контроля цикла",
+        blank=True,
+        help_text=(
+            "Показания, индикаторы и другие результаты "
+            "контроля по лабораторному протоколу."
+        ),
+    )
+
+    note = models.TextField(
+        "Замечания",
+        blank=True,
+    )
+
+    def __str__(self):
+        cycle = self.cycle_number or self.pk or "новый"
+        return f"{self.actual_day} / {self.equipment} / цикл {cycle}"
+
+    class Meta:
+        verbose_name = "Автоклавирование"
+        verbose_name_plural = "Автоклавирование"
+        ordering = ["-actual_day", "-created_at"]
+        constraints = [
+            models.CheckConstraint(
+                condition=(
+                    models.Q(temperature_c__isnull=True)
+                    | models.Q(temperature_c__gt=0)
+                ),
+                name="autoclave_temperature_positive",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    models.Q(holding_time_min__isnull=True)
+                    | models.Q(holding_time_min__gt=0)
+                ),
+                name="autoclave_holding_time_positive",
+            ),
+        ]
+
+
+class AutoclavingItem(models.Model):
+    cycle = models.ForeignKey(
+        Autoclaving,
+        on_delete=models.PROTECT,
+        verbose_name="Цикл автоклавирования",
+        related_name="items",
+    )
+
+    lot = models.ForeignKey(
+        Lot,
+        on_delete=models.PROTECT,
+        verbose_name="Складская партия",
+        related_name="autoclaving_items",
+        null=True,
+        blank=True,
+    )
+
+    description = models.CharField(
+        "Объект обработки",
+        max_length=240,
+        blank=True,
+        help_text=(
+            "Для объекта без складской карточки укажите "
+            "название и идентификационные данные. "
+            "Для складской партии можно уточнить упаковку."
+        ),
+    )
+
+    quantity = models.DecimalField(
+        "Количество в загрузке",
+        max_digits=16,
+        decimal_places=4,
+        validators=[MinValueValidator(Decimal("0.0001"))],
+    )
+
+    unit = models.CharField(
+        "Единица количества",
+        max_length=20,
+        choices=[(x, x) for x in UNITS],
+    )
+
+    note = models.TextField(
+        "Замечания",
+        blank=True,
+    )
+
+    def clean(self):
+        super().clean()
+
+        if not self.lot_id and not self.description.strip():
+            raise ValidationError({
+                "description": (
+                    "Выберите складскую партию "
+                    "или опишите объект обработки."
+                ),
+            })
+
+        if self.lot_id and self.unit != self.lot.unit:
+            raise ValidationError({
+                "unit": (
+                    "Для складской партии используйте "
+                    "её единицу учёта."
+                ),
+            })
+
+    def __str__(self):
+        label = self.description or str(self.lot)
+        return f"{label} — {self.quantity} {self.unit}"
+
+    class Meta:
+        verbose_name = "Объект автоклавирования"
+        verbose_name_plural = "Состав загрузки"
+        ordering = ["pk"]
+        constraints = [
+            models.CheckConstraint(
+                condition=models.Q(quantity__gt=0),
+                name="autoclaving_item_qty_positive",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    models.Q(lot__isnull=False)
+                    | ~models.Q(description="")
+                ),
+                name="autoclaving_item_has_object",
+            ),
+        ]
 
 class Report(models.Model):
     year = models.PositiveIntegerField("Год")
