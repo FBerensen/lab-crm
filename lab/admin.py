@@ -601,39 +601,41 @@ class PreparationAdmin(CaptureAdmin):
     )
 
     readonly_fields = (
-        "kind",
-        "protocol",
-        "output",
-        "qty",
-        "actor",
-        "created_at",
-        "processed",
-        "approved_by",
-        "approved_at",
-        "autoclaving_required",
-        "approved_cycle",
+        'kind',
+        'protocol',
+        'output',
+        'qty',
+        'actor',
+        'created_at',
+        'processed',
+        'approved_by',
+        'approved_at',
+        'autoclaving_required',
+        'approved_cycle',
+        'recipe_calculation',
     )
 
     fields = (
-        "actual_day",
-        "recipe",
-        "planned_volume_ml",
-        "actual_volume_ml",
-        "output_category",
-        "output_storage_place",
-        "output_expiry",
-        "note",
-        "kind",
-        "protocol",
-        "output",
-        "qty",
-        "actor",
-        "created_at",
-        "processed",
-        "approved_by",
-        "approved_at",
-        "autoclaving_required",
-        "approved_cycle",
+        'actual_day',
+        'recipe',
+        'planned_volume_ml',
+        'recipe_calculation',
+        'actual_volume_ml',
+        'output_category',
+        'output_storage_place',
+        'output_expiry',
+        'note',
+        'kind',
+        'protocol',
+        'output',
+        'qty',
+        'actor',
+        'created_at',
+        'processed',
+        'approved_by',
+        'approved_at',
+        'autoclaving_required',
+        'approved_cycle',
     )
 
     inlines = (ComponentInline,)
@@ -729,6 +731,111 @@ class PreparationAdmin(CaptureAdmin):
         obj.qty = obj.actual_volume_ml
 
         super().save_model(request, obj, form, change)
+
+    @admin.display(description="Расчёт состава: план / факт")
+    def recipe_calculation(self, obj):
+        from .models import convert_preparation_quantity
+        from django.utils.html import format_html, format_html_join
+
+        if obj is None or not obj.pk or not obj.recipe_id:
+            return "Выберите протокол и сохраните приготовление."
+        if obj.planned_volume_ml is None:
+            return "Укажите планируемый объём и сохраните запись."
+
+        def number(value):
+            text = format(value, ".8f")
+            short = text.rstrip("0").rstrip(".")
+            if Decimal(text) != value:
+                return "≈ " + short
+            return short
+
+        actual = {}
+        errors = {}
+        unlinked = 0
+        for entry in obj.components.select_related("lot", "recipe_component"):
+            if not entry.recipe_component_id:
+                unlinked += 1
+                continue
+            key = entry.recipe_component_id
+            try:
+                value = convert_preparation_quantity(
+                    entry.qty, entry.lot.unit, entry.recipe_component.unit
+                )
+                actual[key] = actual.get(key, Decimal("0")) + value
+            except ValidationError as exc:
+                errors[key] = " ".join(exc.messages)
+
+        rows = []
+        for component in obj.recipe.recipe_components.order_by("position", "pk"):
+            unit = component.get_unit_display()
+            try:
+                required = component.required_quantity(obj.planned_volume_ml)
+                plan = (
+                    "Довести до конечного объёма "
+                    + number(obj.planned_volume_ml) + " мл"
+                    if required is None else number(required) + " " + unit
+                )
+            except ValidationError as exc:
+                required = None
+                plan = "Ошибка рецептуры: " + " ".join(exc.messages)
+
+            if component.pk in errors:
+                fact = "Ошибка единиц: " + errors[component.pk]
+                difference = "Не рассчитано"
+            elif component.pk not in actual:
+                fact = "Не указан"
+                difference = "—"
+            else:
+                value = actual[component.pk]
+                fact = number(value) + " " + unit
+                if required is None:
+                    difference = "—"
+                else:
+                    delta = value - required
+                    difference = (
+                        "Совпадает" if delta == 0
+                        else ("+" if delta > 0 else "")
+                        + number(delta) + " " + unit
+                    )
+
+            rows.append((
+                component.reagent_name,
+                component.source_concentration or "—",
+                component.final_concentration or "—",
+                plan, fact, difference,
+            ))
+
+        if not rows:
+            return "В протоколе нет компонентов."
+
+        body = format_html_join(
+            "", "<tr><td>{}</td><td>{}</td><td>{}</td>"
+            "<td>{}</td><td>{}</td><td>{}</td></tr>", rows
+        )
+        extra = (
+            f" Строк расхода без компонента рецептуры: {unlinked}."
+            if unlinked else ""
+        )
+        return format_html(
+            '<div style="overflow-x:auto">'
+            '<p>План на сохранённый объём: {} мл. '
+            'Фактический выход: {} мл.</p>'
+            '<table><thead><tr>'
+            '<th>Компонент</th><th>Исходная концентрация</th>'
+            '<th>Конечная концентрация</th><th>Плановый расход</th>'
+            '<th>Фактический расход</th><th>Факт − план</th>'
+            '</tr></thead><tbody>{}</tbody></table>'
+            '<p>Концентрации показаны из протокола, не вычисляются. '
+            'Отклонение информационное и само по себе не блокирует проведение. '
+            '≈ означает округление только при отображении.{}</p>'
+            '<p>После изменения объёма сохраните запись для пересчёта.</p>'
+            '<h3>Порядок приготовления</h3>'
+            '<div style="white-space:pre-wrap">{}</div></div>',
+            number(obj.planned_volume_ml),
+            number(obj.actual_volume_ml) if obj.actual_volume_ml is not None else "—",
+            body, extra, obj.recipe.instructions,
+        )
+
 
 
 @admin.action(description="Утвердить выбранные отчёты")

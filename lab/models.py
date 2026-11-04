@@ -1564,8 +1564,8 @@ class Preparation(Dated):
         return f"{self.kind} · приготовление {number}"
 
     class Meta:
-        verbose_name = "Подготовка партии"
-        verbose_name_plural = "Приготовление и автоклавирование"
+        verbose_name = 'Приготовление раствора или буфера'
+        verbose_name_plural = 'Приготовление растворов и буферов'
 
 
 class Component(models.Model):
