@@ -4,6 +4,8 @@ from django.http import JsonResponse
 from django.shortcuts import redirect
 from django.urls import path
 
+from lab.api import api_dashboard_data, dashboard_view
+
 
 def healthz_view(request):
     """Проверка работоспособности сервиса и подключения к БД (для Docker/Nginx)."""
@@ -19,5 +21,7 @@ def healthz_view(request):
 urlpatterns = [
     path("", lambda request: redirect("admin:index"), name="root"),
     path("healthz/", healthz_view, name="healthz"),
+    path("dashboard/", dashboard_view, name="vue_dashboard"),
+    path("api/v1/dashboard/", api_dashboard_data, name="api_dashboard_data"),
     path("admin/", admin.site.urls),
 ]

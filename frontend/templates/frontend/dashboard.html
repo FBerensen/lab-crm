@@ -1,0 +1,205 @@
+{% load static %}
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Лаборатория · Дашборд визуализации (Vue.js)</title>
+  <link rel="stylesheet" href="{% static 'css/dashboard.css' %}">
+  <!-- Подключение Vue 3 (при необходимости в будущем можно заменить на сборку Vite) -->
+  <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+</head>
+<body>
+  <div id="lab-dashboard-app" class="app-shell">
+    <header class="topbar">
+      <div class="topbar-brand">
+        <span class="badge-pill">Lab CRM · Vue.js</span>
+        <h1>Визуализация лаборатории молекулярной селекции и генетики растений</h1>
+      </div>
+      <nav class="topbar-nav">
+        <button
+          type="button"
+          class="tab-btn"
+          :class="{ active: activeTab === 'stock' }"
+          @click="activeTab = 'stock'"
+        >
+          Баланс и оповещения склада
+        </button>
+        <button
+          type="button"
+          class="tab-btn"
+          :class="{ active: activeTab === 'storage' }"
+          @click="activeTab = 'storage'"
+        >
+          Места хранения и пробы
+        </button>
+        <button
+          type="button"
+          class="tab-btn"
+          :class="{ active: activeTab === 'tasks' }"
+          @click="activeTab = 'tasks'"
+        >
+          Задачи и этапы ПЦР / ФА
+        </button>
+        <a href="/admin/" class="admin-link">Перейти в панель управления (Admin) →</a>
+      </nav>
+    </header>
+
+    <main class="container">
+      <div v-if="loading" class="state-card">Загрузка данных лаборатории...</div>
+      <div v-else-if="error" class="state-card state-error">[[ error ]]</div>
+
+      <template v-else>
+        <!-- Сводные карточки -->
+        <section class="kpi-grid">
+          <div class="kpi-card">
+            <span class="kpi-label">Проекты</span>
+            <strong class="kpi-value">[[ summary.projects_count ]]</strong>
+          </div>
+          <div class="kpi-card">
+            <span class="kpi-label">Образцы / Пробы</span>
+            <strong class="kpi-value">[[ summary.samples_count ]]</strong>
+          </div>
+          <div class="kpi-card">
+            <span class="kpi-label">Активные задачи</span>
+            <strong class="kpi-value">[[ summary.active_tasks_count ]]</strong>
+          </div>
+          <div class="kpi-card" :class="{ 'kpi-alert': summary.alerts_count > 0 }">
+            <span class="kpi-label">Оповещения по реактивам</span>
+            <strong class="kpi-value">[[ summary.alerts_count ]]</strong>
+          </div>
+        </section>
+
+        <!-- Вкладка 1: Баланс реактивов -->
+        <section v-if="activeTab === 'stock'" class="panel">
+          <div class="panel-header">
+            <h2>Наличие и баланс реактивов (склад / задачи / новые реактивы)</h2>
+            <div class="filters">
+              <input
+                v-model="stockSearch"
+                type="search"
+                placeholder="Поиск по названию или коду..."
+                class="search-input"
+              >
+              <label class="checkbox-filter">
+                <input v-model="onlyAlerts" type="checkbox">
+                Только с оповещениями (мало / просрочено)
+              </label>
+            </div>
+          </div>
+
+          <div class="table-wrap">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>Наименование</th>
+                  <th>Внесение</th>
+                  <th>Место хранения</th>
+                  <th class="num">Приход</th>
+                  <th class="num">Расход по задачам / журналу</th>
+                  <th class="num">Расход на новый реактив</th>
+                  <th class="num">В резерве</th>
+                  <th class="num">Свободно</th>
+                  <th class="num">Минимум</th>
+                  <th>Статус</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="item in filteredStock" :key="item.id">
+                  <td>
+                    <a :href="'/admin/lab/lot/' + item.id + '/change/'"><strong>[[ item.name ]]</strong></a>
+                    <div class="subtext">[[ item.code ]] ([[ item.unit ]])</div>
+                  </td>
+                  <td>[[ item.category ]]</td>
+                  <td>[[ item.storage_place ]]</td>
+                  <td class="num">[[ item.receipt_total ]] [[ item.unit ]]</td>
+                  <td class="num">[[ item.used_on_tasks ]] [[ item.unit ]]</td>
+                  <td class="num">[[ item.used_on_preparations ]] [[ item.unit ]]</td>
+                  <td class="num">[[ item.reserved ]] [[ item.unit ]]</td>
+                  <td class="num"><strong>[[ item.free ]] [[ item.unit ]]</strong></td>
+                  <td class="num">[[ item.minimum ]] [[ item.unit ]]</td>
+                  <td>
+                    <span class="status-badge" :class="'status-' + item.status">
+                      [[ item.status_label ]]
+                    </span>
+                  </td>
+                </tr>
+                <tr v-if="filteredStock.length === 0">
+                  <td colspan="10" class="empty-row">По выбранному фильтру записей нет.</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <!-- Вкладка 2: Статистика по местам хранения -->
+        <section v-if="activeTab === 'storage'" class="panel">
+          <div class="panel-header">
+            <h2>Статистика загруженных образцов/проб по местам хранения</h2>
+          </div>
+          <div class="cards-grid">
+            <div v-for="place in storageStats" :key="place.id" class="storage-card">
+              <div class="storage-card-head">
+                <h3>[[ place.name ]]</h3>
+                <span class="count-badge">[[ place.total_samples ]] проб</span>
+              </div>
+              <ul class="kind-list">
+                <li v-for="k in place.by_kind" :key="k.kind">
+                  <span>[[ k.kind ]]</span>
+                  <strong>[[ k.count ]]</strong>
+                </li>
+                <li v-if="place.by_kind.length === 0" class="muted">Пока нет загруженных проб</li>
+              </ul>
+              <a :href="'/admin/lab/storageplace/' + place.id + '/samples-stats/'" class="card-link">
+                Открыть список проб в холодильнике →
+              </a>
+            </div>
+          </div>
+        </section>
+
+        <!-- Вкладка 3: Задачи и этапы -->
+        <section v-if="activeTab === 'tasks'" class="panel">
+          <div class="panel-header">
+            <h2>Отслеживание задач по этапам (Выделение ДНК/РНК, ПЦР, Real-Time, ФА, Секвенирование)</h2>
+          </div>
+          <div class="table-wrap">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>ID / Задача</th>
+                  <th>Проект</th>
+                  <th>Этап</th>
+                  <th>Состояние</th>
+                  <th>Исполнитель</th>
+                  <th class="num">Проб</th>
+                  <th>Срок</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="t in tasks" :key="t.id">
+                  <td>
+                    <a :href="'/admin/lab/task/' + t.id + '/change/'"><strong>#[[ t.id ]] · [[ t.title ]]</strong></a>
+                  </td>
+                  <td>[[ t.project ]]</td>
+                  <td>[[ t.stage ]]</td>
+                  <td>[[ t.status ]]</td>
+                  <td>[[ t.owner ]]</td>
+                  <td class="num">[[ t.samples_count ]]</td>
+                  <td>
+                    <span :class="{ 'overdue-text': t.overdue }">[[ t.due ]]</span>
+                  </td>
+                </tr>
+                <tr v-if="tasks.length === 0">
+                  <td colspan="7" class="empty-row">Задач пока нет.</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+      </template>
+    </main>
+  </div>
+
+  <script src="{% static 'js/dashboard_app.js' %}"></script>
+</body>
+</html>

@@ -41,6 +41,7 @@ admin.site.site_header = "Лаборатория · CRM"
 admin.site.site_title = "Лабораторная CRM"
 admin.site.index_title = "Проекты, работы и материалы"
 admin.site.empty_value_display = "—"
+admin.site.site_url = "/dashboard/"
 
 
 def audit(user, obj, text):
@@ -52,9 +53,12 @@ def audit(user, obj, text):
     )
 
 
+CSV_DANGEROUS_PREFIXES = ("=", "+", "-", "@", "\t", "\r", "\n")
+
+
 def safe_cell(value):
     s = "" if value is None else str(value)
-    if s.lstrip().startswith(("=", "+", "-", "@")):
+    if s.startswith(CSV_DANGEROUS_PREFIXES) or s.lstrip().startswith(CSV_DANGEROUS_PREFIXES):
         return "'" + s
     return s
 
@@ -258,7 +262,7 @@ class TaskMovementInline(admin.TabularInline):
     readonly_fields = ("actual_day", "actor", "created_at")
 
     def has_add_permission(self, request, obj=None):
-        return bool(request.user.is_active and request.user.is_staff)
+        return warehouse(request.user)
 
     def has_change_permission(self, request, obj=None):
         return False
@@ -364,7 +368,7 @@ class WorkLogMovementInline(admin.TabularInline):
     )
 
     def has_add_permission(self, request, obj=None):
-        return bool(request.user.is_active and request.user.is_staff)
+        return warehouse(request.user)
 
     def has_change_permission(self, request, obj=None):
         return False
@@ -833,7 +837,7 @@ class PreparationAdmin(CaptureAdmin):
         return super().add_view(request, form_url=form_url, extra_context=extra)
 
     def has_add_permission(self, request):
-        return bool(request.user.is_active and request.user.is_staff)
+        return warehouse(request.user)
 
     def get_inline_instances(self, request, obj=None):
         if obj is not None:

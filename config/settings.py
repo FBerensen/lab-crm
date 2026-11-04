@@ -1,3 +1,4 @@
+import importlib.util
 import os
 from pathlib import Path
 from django.core.exceptions import ImproperlyConfigured
@@ -6,7 +7,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 
 
 def load_dotenv(dotenv_path: Path) -> None:
-    """Простая загрузка переменных из .env без внешних зависимостей."""
+    """Простая загрузка переменных из env-файла без внешних зависимостей."""
     if not dotenv_path.is_file():
         return
     for raw_line in dotenv_path.read_text(encoding="utf-8").splitlines():
@@ -21,6 +22,8 @@ def load_dotenv(dotenv_path: Path) -> None:
         os.environ.setdefault(key, value)
 
 
+# Поддерживаем разделённый .env.app (без пароля суперпользователя БД) и локальный .env
+load_dotenv(BASE_DIR / ".env.app")
 load_dotenv(BASE_DIR / ".env")
 
 
@@ -42,7 +45,7 @@ IS_PRODUCTION = DJANGO_ENV in ("prod", "production")
 
 DEBUG = env_bool("DJANGO_DEBUG", default=not IS_PRODUCTION)
 
-INSECURE_DEV_KEY = "django-insecure-labcrm-local-dev-key-change-in-production"
+INSECURE_DEV_KEY = "django-insecure-labcrm-local-dev-key-change-in-production-7f9a8b2c1d4e6f0a3b5c7d9e1f2a4b6c8d0e2f4a6b8c0d2e4f"
 SECRET_KEY = os.getenv("DJANGO_SECRET_KEY", "" if IS_PRODUCTION else INSECURE_DEV_KEY)
 
 if not SECRET_KEY or (IS_PRODUCTION and SECRET_KEY == INSECURE_DEV_KEY):
@@ -51,8 +54,25 @@ if not SECRET_KEY or (IS_PRODUCTION and SECRET_KEY == INSECURE_DEV_KEY):
         "уникальный секретный ключ в переменной окружения DJANGO_SECRET_KEY."
     )
 
-ALLOWED_HOSTS = env_list("ALLOWED_HOSTS", "localhost,127.0.0.1,[::1],testserver")
-CSRF_TRUSTED_ORIGINS = env_list("CSRF_TRUSTED_ORIGINS", "")
+# 127.0.0.1 и localhost всегда остаются в ALLOWED_HOSTS, чтобы локальный Docker healthcheck
+# не падал с 400 Bad Request, когда администратор указывает в ALLOWED_HOSTS только внешний домен.
+ALLOWED_HOSTS = list(
+    dict.fromkeys(
+        [
+            *env_list("ALLOWED_HOSTS", "localhost,127.0.0.1,[::1],testserver"),
+            "localhost",
+            "127.0.0.1",
+            "[::1]",
+        ]
+    )
+)
+
+CSRF_TRUSTED_ORIGINS = env_list(
+    "CSRF_TRUSTED_ORIGINS",
+    "https://localhost" if not DEBUG else "http://localhost:8000,http://127.0.0.1:8000",
+)
+
+HAS_AXES = importlib.util.find_spec("axes") is not None
 
 INSTALLED_APPS = [
     "django.contrib.admin",
@@ -61,28 +81,49 @@ INSTALLED_APPS = [
     "django.contrib.sessions",
     "django.contrib.messages",
     "django.contrib.staticfiles",
+    *([ "axes" ] if HAS_AXES else []),
     "lab.apps.LabConfig",
 ]
 
 MIDDLEWARE = [
+    "lab.security.HealthcheckMiddleware",
     "django.middleware.security.SecurityMiddleware",
     "whitenoise.middleware.WhiteNoiseMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
+    "lab.security.AdminLoginRateLimitMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
+    *(["axes.middleware.AxesMiddleware"] if HAS_AXES else []),
 ]
+
+AUTHENTICATION_BACKENDS = [
+    *(["axes.backends.AxesStandaloneBackend"] if HAS_AXES else []),
+    "django.contrib.auth.backends.ModelBackend",
+]
+
+# Настройки защиты от брутфорса (и для встроенного лимитера, и для django-axes)
+LOGIN_FAILURE_LIMIT = int(os.getenv("LOGIN_FAILURE_LIMIT", "5"))
+LOGIN_COOLOFF_SECONDS = int(os.getenv("LOGIN_COOLOFF_SECONDS", str(15 * 60)))
+AXES_FAILURE_LIMIT = LOGIN_FAILURE_LIMIT
+AXES_COOLOFF_TIME = 0.25  # 15 минут
+AXES_LOCKOUT_PARAMETERS = [["username", "ip_address"]]
 
 ROOT_URLCONF = "config.urls"
 WSGI_APPLICATION = "config.wsgi.application"
 ASGI_APPLICATION = "config.asgi.application"
 
+FRONTEND_DIR = BASE_DIR / "frontend"
+
 TEMPLATES = [
     {
         "BACKEND": "django.template.backends.django.DjangoTemplates",
-        "DIRS": [BASE_DIR / "templates"],
+        "DIRS": [
+            FRONTEND_DIR / "templates",
+            BASE_DIR / "templates",
+        ],
         "APP_DIRS": True,
         "OPTIONS": {
             "context_processors": [
@@ -95,14 +136,12 @@ TEMPLATES = [
     }
 ]
 
-# Настройка БД:
-# - Если задан DB_ENGINE=postgresql или указаны параметры DB_HOST / DB_PASSWORD,
-#   используется PostgreSQL (для сервера и Docker).
-# - Иначе по умолчанию используется локальный файл SQLite (удобно для запуска и тестов на ПК).
 DB_ENGINE_SETTING = os.getenv("DB_ENGINE", "").strip().lower()
-USE_POSTGRES = DB_ENGINE_SETTING in ("postgres", "postgresql", "django.db.backends.postgresql") or bool(
-    os.getenv("DB_HOST") or os.getenv("DB_PASSWORD")
-)
+USE_POSTGRES = DB_ENGINE_SETTING in (
+    "postgres",
+    "postgresql",
+    "django.db.backends.postgresql",
+) or bool(os.getenv("DB_HOST") or os.getenv("DB_PASSWORD"))
 
 if USE_POSTGRES and DB_ENGINE_SETTING not in ("sqlite", "sqlite3"):
     DATABASES = {
@@ -126,6 +165,13 @@ else:
         }
     }
 
+CACHES = {
+    "default": {
+        "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+        "LOCATION": "labcrm-default-cache",
+    }
+}
+
 AUTH_PASSWORD_VALIDATORS = [
     {"NAME": "django.contrib.auth.password_validation.UserAttributeSimilarityValidator"},
     {
@@ -143,6 +189,9 @@ USE_TZ = True
 
 STATIC_URL = "/static/"
 STATIC_ROOT = BASE_DIR / "staticfiles"
+STATICFILES_DIRS = [
+    FRONTEND_DIR / "static",
+]
 
 MEDIA_URL = "/media/"
 MEDIA_ROOT = BASE_DIR / "media"
@@ -162,25 +211,28 @@ STORAGES = {
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
-# Параметры сессий и безопасности
+# Параметры сессий, HTTPS за прокси и HSTS (проходят `python manage.py check --deploy`)
 SESSION_COOKIE_AGE = int(os.getenv("SESSION_COOKIE_AGE", str(8 * 60 * 60)))
 SESSION_COOKIE_HTTPONLY = True
+CSRF_COOKIE_HTTPONLY = True
 SESSION_COOKIE_SAMESITE = "Lax"
 CSRF_COOKIE_SAMESITE = "Lax"
 
-COOKIE_SECURE = env_bool("COOKIE_SECURE", default=IS_PRODUCTION)
+COOKIE_SECURE = env_bool("COOKIE_SECURE", default=not DEBUG)
 SESSION_COOKIE_SECURE = COOKIE_SECURE
 CSRF_COOKIE_SECURE = COOKIE_SECURE
 SECURE_CONTENT_TYPE_NOSNIFF = True
+SECURE_REFERRER_POLICY = "same-origin"
 X_FRAME_OPTIONS = "DENY"
 
-if env_bool("USE_X_FORWARDED_PROTO", default=IS_PRODUCTION):
-    SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+SECURE_REDIRECT_EXEMPT = [r"^healthz/?$"]
 
-if IS_PRODUCTION and COOKIE_SECURE:
+if not DEBUG:
     SECURE_HSTS_SECONDS = int(os.getenv("SECURE_HSTS_SECONDS", "31536000"))
     SECURE_HSTS_INCLUDE_SUBDOMAINS = env_bool("SECURE_HSTS_INCLUDE_SUBDOMAINS", default=True)
-    SECURE_SSL_REDIRECT = env_bool("SECURE_SSL_REDIRECT", default=False)
+    SECURE_HSTS_PRELOAD = env_bool("SECURE_HSTS_PRELOAD", default=True)
+    SECURE_SSL_REDIRECT = env_bool("SECURE_SSL_REDIRECT", default=COOKIE_SECURE)
 
 # Настройки почты и рассылки квартальных отчётов
 EMAIL_HOST = os.getenv("EMAIL_HOST", "").strip()

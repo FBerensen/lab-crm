@@ -3,12 +3,14 @@ from decimal import Decimal
 
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Group
+from django.core.cache import cache
 from django.core.exceptions import ValidationError
 from django.core.management import call_command
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
 
+from .admin import safe_cell
 from .models import (
     BufferName,
     Component,
@@ -33,8 +35,8 @@ from .task_samples import TaskSamplesForm
 User = get_user_model()
 
 
-class LabCrmAcceptanceTests(TestCase):
-    """Автоматические тесты по всем пунктам приёмки и ТЗ Lab CRM (п. 1–11)."""
+class LabCrmAcceptanceAndSecurityTests(TestCase):
+    """Автоматические тесты по всем пунктам приёмки, ТЗ (п. 1–11) и 8 пунктам код-ревью безопасности."""
 
     @classmethod
     def setUpTestData(cls):
@@ -91,6 +93,9 @@ class LabCrmAcceptanceTests(TestCase):
             storage_place=cls.place,
         )
 
+    def tearDown(self):
+        cache.clear()
+
     def test_roles_and_permissions(self):
         self.assertTrue(lead(self.lead_user))
         self.assertTrue(warehouse(self.lead_user))
@@ -100,7 +105,6 @@ class LabCrmAcceptanceTests(TestCase):
         self.assertFalse(warehouse(self.worker1))
 
     def test_sample_parent_series_and_number_split(self):
-        """Проверка п. 2–5 ТЗ: ввод исходного образца по двум полям 'серия' и 'номер'."""
         form = SampleAdminForm(
             data={
                 "series": "DR",
@@ -140,7 +144,9 @@ class LabCrmAcceptanceTests(TestCase):
             ["1", "2", "3", "10*", "15:", "20..25"],
         )
 
-    def test_task_lifecycle_and_new_stages(self):
+    def test_task_lifecycle_and_revoked_reviewer_role(self):
+        """Проверка жизненного цикла задачи и п. 4 код-ревью:
+        если у проверяющего отобрали роль 'Руководители', он не может сделать approve/return."""
         today = timezone.localdate()
         task = Task(
             title="Фрагментный анализ и секвенирование партии QT",
@@ -154,13 +160,11 @@ class LabCrmAcceptanceTests(TestCase):
         task.save()
         task.samples.add(self.sample1, self.sample2)
 
-        # Чужой сотрудник не может принять задачу
         with self.assertRaises(ValidationError):
             TaskEvent.objects.create(
                 task=task, actor=self.worker2, action="accept"
             )
 
-        # Исполнитель принимает задачу в работу
         TaskEvent.objects.create(
             task=task,
             actor=self.worker1,
@@ -171,7 +175,6 @@ class LabCrmAcceptanceTests(TestCase):
         self.assertEqual(task.status, "В работе")
         self.assertEqual(task.stage, "Real-Time ПЦР")
 
-        # Остановка без обязательных данных отклоняется
         with self.assertRaises(ValidationError):
             TaskEvent.objects.create(
                 task=task,
@@ -180,7 +183,6 @@ class LabCrmAcceptanceTests(TestCase):
                 note="Не хватает праймеров",
             )
 
-        # Корректная остановка задачи
         TaskEvent.objects.create(
             task=task,
             actor=self.worker1,
@@ -193,7 +195,6 @@ class LabCrmAcceptanceTests(TestCase):
         task.refresh_from_db()
         self.assertEqual(task.status, "Остановлено")
 
-        # Возобновление работы
         TaskEvent.objects.create(
             task=task, actor=self.worker1, action="resume"
         )
@@ -201,7 +202,6 @@ class LabCrmAcceptanceTests(TestCase):
         self.assertEqual(task.status, "В работе")
         self.assertEqual(task.blocker, "")
 
-        # Передача на проверку
         TaskEvent.objects.create(
             task=task,
             actor=self.worker1,
@@ -211,20 +211,27 @@ class LabCrmAcceptanceTests(TestCase):
         task.refresh_from_db()
         self.assertEqual(task.status, "На проверке")
 
-        # Другой руководитель не может утвердить вместо назначенного проверяющего
+        # Пункт 4 ревью: убираем проверяющего из группы «Руководители» до момента approve
+        self.lead_user.groups.remove(self.group_leads)
+        with self.assertRaises(ValidationError):
+            TaskEvent.objects.create(
+                task=task, actor=self.lead_user, action="approve"
+            )
+        # Возвращаем группу «Руководители» обратно
+        self.lead_user.groups.add(self.group_leads)
+
+        # Другой руководитель тоже не может утвердить вместо назначенного проверяющего
         with self.assertRaises(ValidationError):
             TaskEvent.objects.create(
                 task=task, actor=self.lead2_user, action="approve"
             )
 
-        # Назначенный проверяющий утверждает результат
         TaskEvent.objects.create(
             task=task, actor=self.lead_user, action="approve"
         )
         task.refresh_from_db()
         self.assertEqual(task.status, "Завершено")
 
-        # Повтор создаёт новую связанную задачу
         TaskEvent.objects.create(
             task=task,
             actor=self.lead_user,
@@ -234,6 +241,70 @@ class LabCrmAcceptanceTests(TestCase):
         repeated = Task.objects.get(parent=task)
         self.assertEqual(repeated.status, "Назначено")
         self.assertEqual(repeated.samples.count(), 2)
+
+    def test_non_warehouse_staff_cannot_create_preparation(self):
+        """Пункт 5 код-ревью: обычный staff (Исполнитель без роли Склад/Руководители)
+        не может создать Preparation и списать реактивы со склада."""
+        today = timezone.localdate()
+        cat_buffer = ProductCategory.objects.get(name="Буфер")
+        output_lot = Lot.objects.create(
+            category=cat_buffer,
+            name="TAE 1x",
+            unit="л",
+            storage_place=self.place,
+        )
+
+        prep_by_worker = Preparation(
+            actor=self.worker1,
+            actual_day=today,
+            kind="Приготовление буфера",
+            output=output_lot,
+            qty=Decimal("1.0000"),
+            unit="л",
+            protocol="СОП-01",
+        )
+        with self.assertRaises(ValidationError):
+            prep_by_worker.full_clean()
+
+    def test_csv_formula_injection_protection_catches_tab_and_cr(self):
+        """Пункт 6 код-ревью: защита от формул в CSV ловит \\t, \\r, \\n, =, +, -, @."""
+        self.assertEqual(safe_cell("=SUM(A1:A2)"), "'=SUM(A1:A2)")
+        self.assertEqual(safe_cell("  +1+1"), "'  +1+1")
+        self.assertEqual(safe_cell("\t=cmd|' /C calc'!A0"), "'\t=cmd|' /C calc'!A0")
+        self.assertEqual(safe_cell("\tобычный текст с табом"), "'\tобычный текст с табом")
+        self.assertEqual(safe_cell("\r=1+1"), "'\r=1+1")
+        self.assertEqual(safe_cell("\n-1+1"), "'\n-1+1")
+        self.assertEqual(safe_cell("Обычный текст"), "Обычный текст")
+
+    @override_settings(
+        ALLOWED_HOSTS=["crm.production-domain.ru"],
+        SECURE_SSL_REDIRECT=True,
+    )
+    def test_healthcheck_works_on_localhost_even_with_strict_allowed_hosts(self):
+        """Пункт 7 код-ревью: /healthz/ отвечает 200 OK на 127.0.0.1 даже если
+        в ALLOWED_HOSTS стоит только домен, а SECURE_SSL_REDIRECT=True."""
+        resp = self.client.get("/healthz/", HTTP_HOST="127.0.0.1:8000")
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json(), {"status": "ok"})
+
+    @override_settings(LOGIN_FAILURE_LIMIT=3)
+    def test_admin_login_rate_limiting(self):
+        """Пункт 3 код-ревью: защита /admin/login/ блокирует перебор паролей (429)."""
+        cache.clear()
+        login_url = reverse("admin:login")
+        for _ in range(3):
+            resp = self.client.post(
+                login_url,
+                {"username": "lead1", "password": "wrong-password"},
+            )
+            self.assertEqual(resp.status_code, 200)
+
+        # 4-я попытка подряд должна быть заблокирована с HTTP 429
+        blocked_resp = self.client.post(
+            login_url,
+            {"username": "lead1", "password": "wrong-password"},
+        )
+        self.assertEqual(blocked_resp.status_code, 429)
 
     def test_task_samples_range_form(self):
         today = timezone.localdate()
@@ -256,8 +327,6 @@ class LabCrmAcceptanceTests(TestCase):
         self.assertTrue(form.is_valid(), form.errors)
 
     def test_preparation_worklog_writeoff_and_stock_balance(self):
-        """Проверка п. 6–11 ТЗ: приготовление буфера (0.1–100000 + ед. изм.),
-        расход в журнале работ и задачах, отображение на странице баланса и статистики мест хранения."""
         today = timezone.localdate()
         cat_reagent = ProductCategory.objects.get(name="Реактив")
         cat_buffer = ProductCategory.objects.get(name="Буфер")
@@ -286,9 +355,8 @@ class LabCrmAcceptanceTests(TestCase):
             storage_place=self.place,
         )
 
-        # Количество меньше 0.1 отклоняется валидатором (п. 9 ТЗ)
         bad_prep = Preparation(
-            actor=self.lead_user,
+            actor=self.warehouse_user,
             actual_day=today,
             kind="Приготовление буфера",
             output=output_lot,
@@ -300,7 +368,7 @@ class LabCrmAcceptanceTests(TestCase):
             bad_prep.full_clean()
 
         prep = Preparation.objects.create(
-            actor=self.lead_user,
+            actor=self.warehouse_user,
             actual_day=today,
             kind="Приготовление буфера",
             output=output_lot,
@@ -323,7 +391,6 @@ class LabCrmAcceptanceTests(TestCase):
         self.assertEqual(output_lot.unit, "л")
         self.assertTrue(output_lot.released)
 
-        # Списание приготовленного буфера в Журнале работ по дням с привязкой к задаче (п. 11 ТЗ)
         task = Task.objects.create(
             title="Выделение ДНК с новым буфером",
             project=self.project,
@@ -339,7 +406,7 @@ class LabCrmAcceptanceTests(TestCase):
             detail="Израсходовано 0.3 л буфера",
         )
         Movement.objects.create(
-            actor=self.worker1,
+            actor=self.warehouse_user,
             actual_day=today,
             lot=output_lot,
             kind="use_free",
@@ -350,14 +417,10 @@ class LabCrmAcceptanceTests(TestCase):
 
         output_lot.refresh_from_db()
         self.assertEqual(output_lot.quantity, Decimal("1.2000"))
-        # Проверяем, что движение автоматически привязалось к задаче из WorkLog
         self.assertEqual(
             Movement.objects.filter(worklog=worklog, task=task).count(), 1
         )
 
-        # Проверяем работу новых страниц в админке:
-        # 1) Страница баланса и оповещений (/admin/lab/lot/stock-balance/)
-        # 2) Страница статистики проб по месту хранения (/admin/lab/storageplace/<pk>/samples-stats/)
         self.client.force_login(self.lead_user)
         balance_resp = self.client.get(reverse("admin:lab_lot_stock_balance"))
         self.assertEqual(balance_resp.status_code, 200)
@@ -370,6 +433,17 @@ class LabCrmAcceptanceTests(TestCase):
         self.assertEqual(stats_resp.status_code, 200)
         self.assertContains(stats_resp, self.place.name)
         self.assertContains(stats_resp, "QT №1")
+
+        vue_resp = self.client.get(reverse("vue_dashboard"))
+        self.assertEqual(vue_resp.status_code, 200)
+        self.assertContains(vue_resp, "lab-dashboard-app")
+
+        api_resp = self.client.get(reverse("api_dashboard_data"))
+        self.assertEqual(api_resp.status_code, 200)
+        payload = api_resp.json()
+        self.assertIn("summary", payload)
+        self.assertIn("stock_balance", payload)
+        self.assertIn("storage_stats", payload)
 
     def test_worklog_and_quarterly_report(self):
         today = timezone.localdate()

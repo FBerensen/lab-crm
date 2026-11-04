@@ -1,3 +1,4 @@
+import django
 import re
 from decimal import Decimal
 from uuid import uuid4
@@ -441,9 +442,9 @@ class TaskEvent(Stamp):
             raise ValidationError("Нет доступа.")
 
         if self.action in ("approve", "return"):
-            if u.pk != t.reviewer_id or u.pk == t.owner_id:
+            if u.pk != t.reviewer_id or u.pk == t.owner_id or not lead(u):
                 raise ValidationError(
-                    "Решение принимает назначенный проверяющий, "
+                    "Решение принимает назначенный проверяющий с действующими правами руководителя, "
                     "не являющийся исполнителем."
                 )
         elif self.action in ("transfer", "repeat", "plan"):
@@ -696,19 +697,9 @@ class Lot(models.Model):
         verbose_name = "Продукт на склад"
         verbose_name_plural = "Продукты на складе"
         constraints = [
-            models.CheckConstraint(
-                condition=Q(quantity__gte=0),
-                name="lot_quantity_nonnegative",
-            ),
-            models.CheckConstraint(
-                condition=Q(reserved__gte=0) & Q(reserved__lte=F("quantity")),
-                name="lot_reservation_bounds",
-            ),
-            models.CheckConstraint(
-                condition=Q(initial_quantity__isnull=True)
-                | Q(initial_quantity__gte=0),
-                name="lot_initial_quantity_nonnegative",
-            ),
+            models.CheckConstraint(**{("condition" if django.VERSION >= (5, 1) else "check"): Q(quantity__gte=0), "name": "lot_quantity_nonnegative"}),
+            models.CheckConstraint(**{("condition" if django.VERSION >= (5, 1) else "check"): Q(reserved__gte=0) & Q(reserved__lte=F("quantity")), "name": "lot_reservation_bounds"}),
+            models.CheckConstraint(**{("condition" if django.VERSION >= (5, 1) else "check"): Q(initial_quantity__isnull=True) | Q(initial_quantity__gte=0), "name": "lot_initial_quantity_nonnegative"}),
         ]
 
 
@@ -851,9 +842,21 @@ class Preparation(Dated):
     )
     approved_at = models.DateTimeField("Дата допуска", null=True, blank=True)
 
+    def clean(self):
+        super().clean()
+        if self.actor_id and not warehouse(self.actor):
+            raise ValidationError(
+                "Создавать и проводить приготовление/автоклавирование со списанием реактивов "
+                "может только сотрудник роли «Склад» или «Руководители»."
+            )
+
     def complete(self, require_approval=False):
         with transaction.atomic():
             p = Preparation.objects.select_for_update().get(pk=self.pk)
+            if not warehouse(p.actor):
+                raise ValidationError(
+                    "Проводить списание реактивов по складу может только сотрудник роли «Склад» или «Руководители»."
+                )
             if p.processed:
                 raise ValidationError("Партия уже проведена по складу.")
 
@@ -964,10 +967,7 @@ class Report(models.Model):
             models.UniqueConstraint(
                 fields=["year", "quarter"], name="one_report_per_quarter"
             ),
-            models.CheckConstraint(
-                condition=Q(quarter__gte=1) & Q(quarter__lte=4),
-                name="valid_report_quarter",
-            ),
+            models.CheckConstraint(**{("condition" if django.VERSION >= (5, 1) else "check"): Q(quarter__gte=1) & Q(quarter__lte=4), "name": "valid_report_quarter"}),
         ]
 
 
