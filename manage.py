@@ -1,8 +1,20 @@
+#!/usr/bin/env python
+"""Точка входа командной строки Django для управления проектом Lab CRM."""
 import os
 import sys
 
-os.environ.setdefault("DJANGO_SETTINGS_MODULE", "lab.settings")
 
-from django.core.management import execute_from_command_line
+def main() -> None:
+    os.environ.setdefault("DJANGO_SETTINGS_MODULE", "config.settings")
+    try:
+        from django.core.management import execute_from_command_line
+    except ImportError as exc:
+        raise ImportError(
+            "Не удалось импортировать Django. Убедитесь, что Django установлен "
+            "и активировано виртуальное окружение (venv)."
+        ) from exc
+    execute_from_command_line(sys.argv)
 
-execute_from_command_line(sys.argv)
+
+if __name__ == "__main__":
+    main()

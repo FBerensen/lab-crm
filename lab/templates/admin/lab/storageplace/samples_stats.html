@@ -1,0 +1,182 @@
+{% extends "admin/base_site.html" %}
+
+{% block content %}
+<div id="content-main">
+  <style>
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      gap: 16px;
+      margin: 16px 0 24px 0;
+    }
+    .stats-card {
+      background: #f8fafc;
+      border: 1px solid #d2d6dc;
+      border-radius: 6px;
+      padding: 14px 16px;
+    }
+    .stats-card h3 {
+      margin: 0 0 10px 0;
+      font-size: 15px;
+      color: #1f2937;
+    }
+    .stats-table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 8px;
+    }
+    .stats-table th, .stats-table td {
+      border: 1px solid #d2d6dc;
+      padding: 7px 10px;
+      text-align: left;
+    }
+    .stats-table th {
+      background: #eef2f6;
+      font-weight: 600;
+    }
+  </style>
+
+  <p>
+    <a href="{% url 'admin:lab_storageplace_changelist' %}">← Вернуться к списку «Места хранения»</a>
+    {% if selected_place %}
+      | <a href="{% url 'admin:lab_storageplace_all_samples_stats' %}">Показать сводную статистику по всем местам хранения</a>
+    {% endif %}
+  </p>
+
+  <h2>
+    {% if selected_place %}
+      Место хранения: «{{ selected_place.name }}» — всего образцов/проб: {{ total_samples }}
+    {% else %}
+      Сводная статистика по всем местам хранения — всего образцов/проб: {{ total_samples }}
+    {% endif %}
+  </h2>
+
+  <div class="stats-grid">
+    <div class="stats-card">
+      <h3>По местам хранения</h3>
+      <table class="stats-table">
+        <thead>
+          <tr>
+            <th>Место хранения</th>
+            <th>Проб</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for item in by_place %}
+            <tr>
+              <td>
+                <a href="{% url 'admin:lab_storageplace_samples_stats' item.pk %}">
+                  {{ item.name }}
+                </a>
+              </td>
+              <td><strong>{{ item.count }}</strong></td>
+            </tr>
+          {% empty %}
+            <tr><td colspan="2">Нет данных</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+
+    <div class="stats-card">
+      <h3>По типам материала (ДНК, РНК и др.)</h3>
+      <table class="stats-table">
+        <thead>
+          <tr>
+            <th>Тип материала</th>
+            <th>Проб</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for item in by_kind %}
+            <tr>
+              <td>{{ item.kind }}</td>
+              <td><strong>{{ item.count }}</strong></td>
+            </tr>
+          {% empty %}
+            <tr><td colspan="2">Нет проб</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+
+    <div class="stats-card">
+      <h3>По проектам</h3>
+      <table class="stats-table">
+        <thead>
+          <tr>
+            <th>Проект</th>
+            <th>Проб</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for item in by_project %}
+            <tr>
+              <td>{{ item.project__title }}</td>
+              <td><strong>{{ item.count }}</strong></td>
+            </tr>
+          {% empty %}
+            <tr><td colspan="2">Нет проб</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+
+    <div class="stats-card">
+      <h3>По сериям</h3>
+      <table class="stats-table">
+        <thead>
+          <tr>
+            <th>Серия</th>
+            <th>Проб</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for item in by_series %}
+            <tr>
+              <td>{{ item.series }}</td>
+              <td><strong>{{ item.count }}</strong></td>
+            </tr>
+          {% empty %}
+            <tr><td colspan="2">Нет проб</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <h3>Загруженные образцы/пробы (показаны до 200 записей)</h3>
+  <table class="stats-table">
+    <thead>
+      <tr>
+        <th>Серия и номер</th>
+        <th>Серия</th>
+        <th>Номер</th>
+        <th>Тип материала</th>
+        <th>Проект</th>
+        <th>Исходный образец/проба</th>
+        <th>Место хранения</th>
+        <th>Примечание</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for s in samples %}
+        <tr>
+          <td><a href="{% url 'admin:lab_sample_change' s.pk %}"><strong>{{ s.code }}</strong></a></td>
+          <td>{{ s.series }}</td>
+          <td>{{ s.number }}</td>
+          <td>{{ s.kind }}</td>
+          <td>{{ s.project }}</td>
+          <td>{{ s.parent|default:"—" }}</td>
+          <td>{{ s.storage_place|default:s.location }}</td>
+          <td>{{ s.note|default:"—" }}</td>
+        </tr>
+      {% empty %}
+        <tr>
+          <td colspan="8">В выбранном месте хранения пока нет зарегистрированных образцов/проб.</td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

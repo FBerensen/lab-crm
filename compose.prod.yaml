@@ -1,0 +1,28 @@
+# Конфигурация для боевого сервера (запуск поверх основного compose.yaml):
+# docker compose -f compose.yaml -f compose.prod.yaml up -d --build
+services:
+  web:
+    environment:
+      DJANGO_ENV: production
+      DJANGO_DEBUG: "0"
+      COOKIE_SECURE: ${COOKIE_SECURE:-1}
+      USE_X_FORWARDED_PROTO: "1"
+    ports: !override []
+    expose:
+      - "8000"
+
+  scheduler:
+    environment:
+      DJANGO_ENV: production
+      DJANGO_DEBUG: "0"
+
+  nginx:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    volumes:
+      - ./deploy/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      web:
+        condition: service_healthy

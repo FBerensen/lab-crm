@@ -3,10 +3,14 @@
 {% block object-tools-items %}
   {% if has_add_permission %}
     <li>
-      <a href="{% url 'admin:lab_sample_batch_add' %}">
-        Добавить партию
+      <a href="{% url 'admin:lab_sample_add' %}" class="addlink">
+        Добавить образец/ пробу
+      </a>
+    </li>
+    <li>
+      <a href="{% url 'admin:lab_sample_batch_add' %}" class="addlink">
+        Добавить партию образцов
       </a>
     </li>
   {% endif %}
-  {{ block.super }}
 {% endblock %}

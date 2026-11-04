@@ -1,0 +1,152 @@
+{% extends "admin/base_site.html" %}
+
+{% block content %}
+<div id="content-main">
+  <style>
+    .alert-box {
+      padding: 12px 16px;
+      border-radius: 6px;
+      margin-bottom: 16px;
+      border-left: 5px solid;
+    }
+    .alert-danger {
+      background: #fdf2f2;
+      border-color: #c81e1e;
+      color: #771d1d;
+    }
+    .alert-warning {
+      background: #fdfdea;
+      border-color: #c27803;
+      color: #723b13;
+    }
+    .alert-ok {
+      background: #f3faf7;
+      border-color: #057a55;
+      color: #03543f;
+    }
+    .badge {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 4px;
+      font-size: 12px;
+      font-weight: 600;
+    }
+    .badge-danger { background: #fde8e8; color: #9b1c1c; }
+    .badge-warn { background: #fef3c7; color: #92400e; }
+    .badge-ok { background: #def7ec; color: #03543f; }
+    .balance-table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 12px;
+    }
+    .balance-table th, .balance-table td {
+      border: 1px solid #d2d6dc;
+      padding: 8px 10px;
+      text-align: left;
+      vertical-align: top;
+    }
+    .balance-table th {
+      background: #f4f5f7;
+      font-weight: 600;
+    }
+    .num { text-align: right !important; font-variant-numeric: tabular-nums; }
+  </style>
+
+  <p>
+    <a href="{% url 'admin:lab_lot_changelist' %}">← Вернуться к списку продуктов на складе</a>
+  </p>
+
+  {% if low_stock_lots or expired_lots or expiring_soon_lots %}
+    <div class="alert-box alert-danger">
+      <strong>Оповещения по складу:</strong>
+      <ul style="margin: 8px 0 0 18px;">
+        {% for item in low_stock_lots %}
+          <li>
+            <strong>Мало на складе / требуется пополнение:</strong>
+            <a href="{% url 'admin:lab_lot_change' item.pk %}">{{ item.name }} ({{ item.code }})</a>
+            — свободно <strong>{{ item.free }} {{ item.unit }}</strong>
+            при минимуме {{ item.minimum }} {{ item.unit }}.
+          </li>
+        {% endfor %}
+        {% for item in expired_lots %}
+          <li>
+            <strong>Срок годности истёк ({{ item.expiry }}):</strong>
+            <a href="{% url 'admin:lab_lot_change' item.pk %}">{{ item.name }} ({{ item.code }})</a>
+            — остаток {{ item.quantity }} {{ item.unit }}.
+          </li>
+        {% endfor %}
+        {% for item in expiring_soon_lots %}
+          <li>
+            <strong>Скоро истекает срок годности (до {{ item.expiry }}):</strong>
+            <a href="{% url 'admin:lab_lot_change' item.pk %}">{{ item.name }} ({{ item.code }})</a>
+            — свободно {{ item.free }} {{ item.unit }}.
+          </li>
+        {% endfor %}
+      </ul>
+    </div>
+  {% else %}
+    <div class="alert-box alert-ok">
+      <strong>Все реактивы, буферы и пластик в норме:</strong> критических остатков и просроченных партий не обнаружено.
+    </div>
+  {% endif %}
+
+  <h2>Баланс между складом, расходом по задачам/журналу и приготовлением новых реактивов</h2>
+  <table class="balance-table">
+    <thead>
+      <tr>
+        <th>Продукт / Код партии</th>
+        <th>Категория</th>
+        <th>Место хранения</th>
+        <th class="num">Поступило всего</th>
+        <th class="num">Расход по задачам и журналу</th>
+        <th class="num">Расход на новый реактив / буфер</th>
+        <th class="num">Прочее списание</th>
+        <th class="num">В резерве по задачам</th>
+        <th class="num">Физический остаток</th>
+        <th class="num">Свободный остаток</th>
+        <th class="num">Минимум</th>
+        <th>Статус</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in rows %}
+        <tr>
+          <td>
+            <a href="{% url 'admin:lab_lot_change' row.lot.pk %}">
+              <strong>{{ row.lot.name }}</strong>
+            </a><br>
+            <small>{{ row.lot.code }} ({{ row.lot.unit }})</small>
+          </td>
+          <td>{{ row.lot.category|default:"—" }}</td>
+          <td>{{ row.lot.storage_place|default:row.lot.location|default:"—" }}</td>
+          <td class="num">{{ row.receipt_total }} {{ row.lot.unit }}</td>
+          <td class="num">{{ row.used_on_tasks }} {{ row.lot.unit }}</td>
+          <td class="num">{{ row.used_on_preparations }} {{ row.lot.unit }}</td>
+          <td class="num">{{ row.writeoff_total }} {{ row.lot.unit }}</td>
+          <td class="num">{{ row.lot.reserved }} {{ row.lot.unit }}</td>
+          <td class="num"><strong>{{ row.lot.quantity }} {{ row.lot.unit }}</strong></td>
+          <td class="num"><strong>{{ row.lot.free }} {{ row.lot.unit }}</strong></td>
+          <td class="num">{{ row.lot.minimum }} {{ row.lot.unit }}</td>
+          <td>
+            {% if row.lot.expired %}
+              <span class="badge badge-danger">Просрочен ({{ row.lot.expiry }})</span>
+            {% elif not row.lot.released %}
+              <span class="badge badge-warn">Ожидает допуска</span>
+            {% elif row.lot.free <= 0 %}
+              <span class="badge badge-danger">Нет свободного остатка</span>
+            {% elif row.lot.free < row.lot.minimum %}
+              <span class="badge badge-danger">Ниже минимума!</span>
+            {% else %}
+              <span class="badge badge-ok">В норме</span>
+            {% endif %}
+          </td>
+        </tr>
+      {% empty %}
+        <tr>
+          <td colspan="12">На складе пока нет зарегистрированных партий.</td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

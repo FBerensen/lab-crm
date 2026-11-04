@@ -1,0 +1,20 @@
+{% extends "admin/base_site.html" %}
+
+{% block content %}
+<div id="content-main">
+  <p>
+    Каждый номер создаёт отдельную карточку образца.
+    При ошибке валидации или обнаружении дубликата вся партия не сохраняется.
+  </p>
+  <form method="post" novalidate>
+    {% csrf_token %}
+    <fieldset class="module aligned">
+      {{ form.as_p }}
+    </fieldset>
+    <div class="submit-row">
+      <input type="submit" value="Создать партию" class="default">
+      <a href="{{ list_url }}" class="closelink">Вернуться к образцам</a>
+    </div>
+  </form>
+</div>
+{% endblock %}

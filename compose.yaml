@@ -3,15 +3,15 @@ services:
     image: postgres:17
     restart: unless-stopped
     environment:
-      POSTGRES_DB: labcrm
+      POSTGRES_DB: ${DB_NAME:-labcrm}
       POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: ${POSTGRES_ADMIN_PASSWORD}
-      LAB_DB_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_PASSWORD: ${POSTGRES_ADMIN_PASSWORD:-postgres_admin_local_pass}
+      LAB_DB_PASSWORD: ${DB_PASSWORD:-labcrm_local_pass}
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./init-db.sh:/docker-entrypoint-initdb.d/10-labcrm.sh:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d labcrm"]
+      test: ["CMD-SHELL", "pg_isready -U postgres -d ${DB_NAME:-labcrm}"]
       interval: 5s
       timeout: 5s
       retries: 20
@@ -19,7 +19,28 @@ services:
   web:
     build: .
     restart: unless-stopped
-    env_file: .env
+    environment:
+      DJANGO_ENV: ${DJANGO_ENV:-development}
+      DJANGO_DEBUG: ${DJANGO_DEBUG:-0}
+      DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:-django-insecure-docker-local-key-change-on-server}
+      ALLOWED_HOSTS: ${ALLOWED_HOSTS:-localhost,127.0.0.1,[::1]}
+      CSRF_TRUSTED_ORIGINS: ${CSRF_TRUSTED_ORIGINS:-http://localhost:8000,http://127.0.0.1:8000}
+      DB_ENGINE: postgresql
+      DB_NAME: ${DB_NAME:-labcrm}
+      DB_USER: ${DB_USER:-labcrm}
+      DB_PASSWORD: ${DB_PASSWORD:-labcrm_local_pass}
+      DB_HOST: db
+      DB_PORT: 5432
+      TIME_ZONE: ${TIME_ZONE:-Europe/Moscow}
+      COOKIE_SECURE: ${COOKIE_SECURE:-0}
+      USE_X_FORWARDED_PROTO: ${USE_X_FORWARDED_PROTO:-0}
+      EMAIL_HOST: ${EMAIL_HOST:-}
+      EMAIL_PORT: ${EMAIL_PORT:-587}
+      EMAIL_HOST_USER: ${EMAIL_HOST_USER:-}
+      EMAIL_HOST_PASSWORD: ${EMAIL_HOST_PASSWORD:-}
+      EMAIL_USE_TLS: ${EMAIL_USE_TLS:-1}
+      DEFAULT_FROM_EMAIL: ${DEFAULT_FROM_EMAIL:-labcrm@localhost}
+      REPORT_RECIPIENTS: ${REPORT_RECIPIENTS:-}
     ports:
       - "127.0.0.1:8000:8000"
     depends_on:
@@ -30,16 +51,34 @@ services:
         - CMD
         - python
         - -c
-        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/admin/login/', timeout=5)"
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz/', timeout=5)"
       interval: 15s
       timeout: 10s
       retries: 20
-      start_period: 30s
+      start_period: 25s
 
   scheduler:
     build: .
     restart: unless-stopped
-    env_file: .env
+    environment:
+      RUN_MIGRATIONS: "0"
+      DJANGO_ENV: ${DJANGO_ENV:-development}
+      DJANGO_DEBUG: ${DJANGO_DEBUG:-0}
+      DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:-django-insecure-docker-local-key-change-on-server}
+      DB_ENGINE: postgresql
+      DB_NAME: ${DB_NAME:-labcrm}
+      DB_USER: ${DB_USER:-labcrm}
+      DB_PASSWORD: ${DB_PASSWORD:-labcrm_local_pass}
+      DB_HOST: db
+      DB_PORT: 5432
+      TIME_ZONE: ${TIME_ZONE:-Europe/Moscow}
+      EMAIL_HOST: ${EMAIL_HOST:-}
+      EMAIL_PORT: ${EMAIL_PORT:-587}
+      EMAIL_HOST_USER: ${EMAIL_HOST_USER:-}
+      EMAIL_HOST_PASSWORD: ${EMAIL_HOST_PASSWORD:-}
+      EMAIL_USE_TLS: ${EMAIL_USE_TLS:-1}
+      DEFAULT_FROM_EMAIL: ${DEFAULT_FROM_EMAIL:-labcrm@localhost}
+      REPORT_RECIPIENTS: ${REPORT_RECIPIENTS:-}
     command: ["python", "manage.py", "scheduler"]
     depends_on:
       web:

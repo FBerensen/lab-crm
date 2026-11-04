@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Квартальный отчёт — {{ report }}</title>
+  <style>
+    body {
+      font: 16px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      margin: 24px;
+      color: #202620;
+    }
+    h1 { font-size: 28px; margin-bottom: 8px; }
+    h2 { font-size: 20px; margin-top: 36px; border-bottom: 1px solid #dce2dc; padding-bottom: 4px; }
+    .meta { color: #4a544a; margin-bottom: 16px; }
+    table { border-collapse: collapse; width: 100%; font-size: 13px; margin-top: 8px; }
+    th, td {
+      border: 1px solid #ccc;
+      padding: 8px;
+      text-align: left;
+      vertical-align: top;
+      overflow-wrap: anywhere;
+    }
+    th { background: #eef2ee; font-weight: 600; }
+    .wrap { overflow-x: auto; }
+    .toolbar { margin: 16px 0; }
+    .print-btn {
+      padding: 8px 16px;
+      background: #2b5b84;
+      color: #fff;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 14px;
+    }
+    @media print {
+      body { margin: 8mm; }
+      .wrap { overflow: visible; }
+      .toolbar { display: none; }
+      thead { display: table-header-group; }
+      tr { break-inside: avoid; }
+    }
+  </style>
+</head>
+<body>
+  <h1>Отчёт: {{ report }}</h1>
+  <p class="meta">
+    События относятся к отчётному периоду.
+    Снимки задач и склада отражают момент формирования,
+    а не ретроспективное состояние на конец квартала.
+  </p>
+  <div class="toolbar">
+    <button type="button" class="print-btn" onclick="window.print()">Печать / Сохранить в PDF</button>
+  </div>
+
+  {% for section in sections %}
+    <h2>{{ section.heading }}</h2>
+    {% if not section.is_table %}
+      <p>{{ section.text }}</p>
+    {% elif not section.rows %}
+      <p>Записей за период нет.</p>
+    {% else %}
+      <div class="wrap">
+        <table>
+          <thead>
+            <tr>
+              {% for header in section.headers %}
+                <th>{{ header }}</th>
+              {% endfor %}
+            </tr>
+          </thead>
+          <tbody>
+            {% for row in section.rows %}
+              <tr>
+                {% for cell in row %}
+                  <td>{{ cell }}</td>
+                {% endfor %}
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% endif %}
+  {% endfor %}
+</body>
+</html>

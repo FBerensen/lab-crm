@@ -1,0 +1,11 @@
+{% extends "admin/change_list.html" %}
+
+{% block object-tools-items %}
+  {% if has_add_permission %}
+    <li>
+      <a href="{% url 'admin:lab_preparation_add' %}" class="addlink">
+        Добавить общелабораторную работу
+      </a>
+    </li>
+  {% endif %}
+{% endblock %}

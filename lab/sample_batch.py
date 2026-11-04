@@ -1,24 +1,30 @@
 import json
+from urllib.parse import urlencode
 
 from django import forms
 from django.contrib import messages
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.core.serializers.json import DjangoJSONEncoder
 from django.db import IntegrityError, transaction
-from django.http import HttpResponse
+from django.db.models import Q
 from django.shortcuts import redirect
-from django.template import engines
+from django.template.response import TemplateResponse
 from django.urls import path, reverse
 
 from .models import (
-    Audit, Project, Sample,
-    validate_sample_number, validate_sample_series,
+    Audit,
+    Project,
+    Sample,
+    StoragePlace,
+    validate_sample_number,
+    validate_sample_series,
 )
 
 
 def can_edit_samples(user):
     return bool(
-        user.is_active
+        user
+        and user.is_active
         and user.is_staff
         and (
             user.is_superuser
@@ -27,6 +33,92 @@ def can_edit_samples(user):
             ).exists()
         )
     )
+
+
+class SampleAdminForm(forms.ModelForm):
+    """Форма добавления/редактирования образца с раздельным вводом серии и номера исходной пробы."""
+
+    parent_series = forms.CharField(
+        label="Исходный образец/проба — серия",
+        required=False,
+        max_length=5,
+        validators=[validate_sample_series],
+        help_text="Укажите серию исходной пробы (2–5 символов), если проба производная.",
+    )
+    parent_number = forms.CharField(
+        label="Исходный образец/проба — номер",
+        required=False,
+        max_length=20,
+        validators=[validate_sample_number],
+        help_text="Укажите номер исходной пробы (числа 1–150, символы * , . .. :).",
+    )
+
+    class Meta:
+        model = Sample
+        fields = (
+            "series",
+            "number",
+            "project",
+            "kind",
+            "storage_place",
+            "location",
+            "parent",
+            "parent_series",
+            "parent_number",
+            "note",
+        )
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        if "storage_place" in self.fields:
+            current_place_id = getattr(self.instance, "storage_place_id", None)
+            self.fields["storage_place"].queryset = StoragePlace.objects.filter(
+                Q(active=True) | Q(pk=current_place_id)
+            )
+            self.fields["storage_place"].empty_label = "Выберите место хранения"
+
+        if self.instance and self.instance.pk and self.instance.parent_id:
+            self.fields["parent_series"].initial = self.instance.parent.series
+            self.fields["parent_number"].initial = self.instance.parent.number
+
+    def clean(self):
+        cleaned = super().clean()
+        p_series = (cleaned.get("parent_series") or "").strip()
+        p_number = (cleaned.get("parent_number") or "").strip()
+        parent = cleaned.get("parent")
+        project = cleaned.get("project") or getattr(self.instance, "project", None)
+
+        if p_series or p_number:
+            if not (p_series and p_number):
+                raise forms.ValidationError(
+                    "Для указания исходного образца по серии и номеру заполните оба поля: "
+                    "«Исходный образец/проба — серия» и «Исходный образец/проба — номер»."
+                )
+            qs = Sample.objects.filter(series=p_series, number=p_number)
+            if project:
+                qs = qs.filter(project=project)
+            found_parent = qs.first()
+            if not found_parent:
+                raise forms.ValidationError(
+                    f"Исходный образец/проба с серией «{p_series}» и номером «{p_number}» "
+                    "не найден в выбранном проекте."
+                )
+            cleaned["parent"] = found_parent
+            self.instance.parent = found_parent
+        elif parent:
+            cleaned["parent"] = parent
+
+        storage_place = cleaned.get("storage_place")
+        location = (cleaned.get("location") or "").strip()
+        if storage_place:
+            cleaned["location"] = storage_place.name
+            self.instance.location = storage_place.name
+        elif not location:
+            raise forms.ValidationError(
+                "Выберите «Место хранения (из справочника)» или укажите место хранения вручную."
+            )
+
+        return cleaned
 
 
 class SampleBatchForm(forms.Form):
@@ -48,7 +140,7 @@ class SampleBatchForm(forms.Form):
         max_length=3000,
         widget=forms.Textarea(attrs={"rows": 3}),
         help_text=(
-            "Например: 5* 12* 52:. Разделяйте номера пробелами "
+            "Например: 5* 12* 52.. 75:. Разделяйте номера пробелами "
             "или переносами строк. Запятая может быть частью номера."
         ),
     )
@@ -59,8 +151,14 @@ class SampleBatchForm(forms.Form):
         label="Тип материала",
         choices=Sample._meta.get_field("kind").choices,
     )
+    storage_place = forms.ModelChoiceField(
+        label="Место хранения (из справочника)",
+        queryset=StoragePlace.objects.filter(active=True),
+        required=False,
+    )
     location = forms.CharField(
-        label="Место хранения",
+        label="Место хранения (текстом, если нет в справочнике)",
+        required=False,
         max_length=Sample._meta.get_field("location").max_length,
     )
     note = forms.CharField(
@@ -72,6 +170,15 @@ class SampleBatchForm(forms.Form):
     def clean(self):
         data = super().clean()
         first, last = data.get("first"), data.get("last")
+
+        storage_place = data.get("storage_place")
+        location = (data.get("location") or "").strip()
+        if storage_place:
+            data["location"] = storage_place.name
+        elif not location:
+            raise forms.ValidationError(
+                "Выберите место хранения из справочника или укажите его текстом."
+            )
 
         if first is None or last is None:
             return data
@@ -117,25 +224,11 @@ class SampleBatchForm(forms.Form):
         return data
 
 
-BATCH_TEMPLATE = """
-{% extends "admin/base_site.html" %}
-{% block content %}
-<h1>{{ title }}</h1>
-<p>Каждый номер создаёт отдельную карточку.
-При ошибке или дубликате вся партия не сохраняется.</p>
-<form method="post">
-  {% csrf_token %}
-  {{ form.as_p }}
-  <div class="submit-row">
-    <input type="submit" value="Создать партию" class="default">
-    <a href="{{ list_url }}">Вернуться к образцам</a>
-  </div>
-</form>
-{% endblock %}
-"""
-
-
 class SampleBatchMixin:
+    form = SampleAdminForm
+    batch_add_template = "admin/lab/sample/batch_add.html"
+    audit_in_save_model = False
+
     def has_add_permission(self, request):
         return can_edit_samples(request.user)
 
@@ -144,6 +237,11 @@ class SampleBatchMixin:
 
     def has_delete_permission(self, request, obj=None):
         return False
+
+    def add_view(self, request, form_url="", extra_context=None):
+        extra = dict(extra_context or {})
+        extra.setdefault("title", "Добавить образец/ пробу")
+        return super().add_view(request, form_url=form_url, extra_context=extra)
 
     def get_urls(self):
         opts = self.model._meta
@@ -194,13 +292,13 @@ class SampleBatchMixin:
                             number=number,
                             project=data["project"],
                             kind=data["kind"],
+                            storage_place=data.get("storage_place"),
                             location=data["location"],
                             note=data["note"],
                         )
                         for number in numbers
                     ]
 
-                    # Validate every card before saving any card.
                     for sample in samples:
                         sample.full_clean()
 
@@ -241,11 +339,8 @@ class SampleBatchMixin:
                     f"Серия: {data['series']}.",
                     level=messages.SUCCESS,
                 )
-                return redirect(
-                    list_url + "?series__exact=" + data["series"]
-                    if data["series"].isalnum()
-                    else list_url
-                )
+                query = urlencode({"series__exact": data["series"]})
+                return redirect(f"{list_url}?{query}")
 
         context = {
             **self.admin_site.each_context(request),
@@ -255,20 +350,24 @@ class SampleBatchMixin:
             "list_url": list_url,
         }
 
-        template = engines["django"].from_string(BATCH_TEMPLATE)
-        return HttpResponse(template.render(context, request))
+        return TemplateResponse(request, self.batch_add_template, context)
 
     def save_model(self, request, obj, form, change):
         before = None
 
         if change:
-            before = (
-                Sample.objects.filter(pk=obj.pk).values().get()
-            )
+            before = Sample.objects.filter(pk=obj.pk).values().get()
 
         super().save_model(request, obj, form, change)
 
-        if change:
+        if not change:
+            Audit.objects.create(
+                actor=request.user,
+                entity=obj._meta.label,
+                object_id=str(obj.pk),
+                detail=f"Создание записи: {obj.code}; проект={obj.project_id}",
+            )
+        elif before is not None:
             after = Sample.objects.filter(pk=obj.pk).values().get()
             changes = {
                 key: {

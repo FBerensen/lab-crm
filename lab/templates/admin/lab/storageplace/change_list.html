@@ -1,0 +1,10 @@
+{% extends "admin/change_list.html" %}
+
+{% block object-tools-items %}
+  <li>
+    <a href="{% url 'admin:lab_storageplace_all_samples_stats' %}" class="viewsitelink">
+      Статистика по загруженным образцам/пробам
+    </a>
+  </li>
+  {{ block.super }}
+{% endblock %}
