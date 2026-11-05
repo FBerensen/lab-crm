@@ -1,0 +1,13 @@
+{% extends "admin/base_site.html" %}
+{% block content %}
+<h1>{{ title }}</h1>
+<p>Всего доступно: {{ total_series }} серий, {{ total_samples }} образцов/проб.</p>
+<p><a class="button" href="{{ all_samples_url }}">Все образцы, общий поиск и пакетный ввод</a></p>
+<form method="get" action="{{ series_url }}"><label>Найти серию: <input type="search" name="q" value="{{ q }}"></label><button type="submit">Найти</button> <a href="{{ series_url }}">Сбросить поиск серий</a></form>
+<p>Найдено серий: {{ page.paginator.count }}. Откройте серию для просмотра её образцов.</p>
+<div style="overflow-x:auto"><table><thead><tr><th>Серия</th><th>Образцов/проб</th><th>Проектов</th><th>Проекты</th><th>Мест хранения</th><th>Места</th><th>Без привязки к месту</th></tr></thead><tbody>
+{% for row in rows %}<tr><td><a href="{{ row.url }}">{{ row.series|default:"Без обозначения" }}</a></td><td>{{ row.samples }}</td><td>{{ row.projects }}</td><td>{% for project in row.project_names %}{{ project.title }}{% if not forloop.last %}; {% endif %}{% empty %}—{% endfor %}{% if row.extra_projects %}; ещё {{ row.extra_projects }}{% endif %}</td><td>{{ row.places }}</td><td>{% for place in row.place_names %}{{ place.name }}{% if not forloop.last %}; {% endif %}{% empty %}—{% endfor %}{% if row.extra_places %}; ещё {{ row.extra_places }}{% endif %}</td><td>{{ row.unplaced }}</td></tr>{% empty %}<tr><td colspan="7">Серий по выбранным условиям нет.</td></tr>{% endfor %}
+</tbody></table></div>
+<p>Страница {{ page.number }} из {{ page.paginator.num_pages }}. {% if previous_url %}<a href="{{ previous_url }}">Назад</a>{% endif %} {% if next_url %}<a href="{{ next_url }}">Далее</a>{% endif %}</p>
+<p>Серии формируются по существующим обозначениям. Номера, исходные пробы, проекты и места хранения не изменяются.</p>
+{% endblock %}

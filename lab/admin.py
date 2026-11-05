@@ -1298,3 +1298,7 @@ _configure_stage3(admin.site)
 # LABCRM_STORAGE_STAGE4
 from .storage_stage4_admin import configure_admin as _configure_storage4
 _configure_storage4(admin.site)
+
+# LABCRM_SAMPLE_SERIES_STAGE5A
+from .sample_series_stage5 import configure_admin as _configure_series5
+_configure_series5(admin.site)
