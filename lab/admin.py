@@ -1294,3 +1294,7 @@ _configure_stage2(admin.site)
 # LABCRM_PREPARATION_STAGE3
 from .preparation_wizard import configure_admin as _configure_stage3
 _configure_stage3(admin.site)
+
+# LABCRM_STORAGE_STAGE4
+from .storage_stage4_admin import configure_admin as _configure_storage4
+_configure_storage4(admin.site)

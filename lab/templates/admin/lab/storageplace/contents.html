@@ -1,0 +1,26 @@
+{% extends "admin/base_site.html" %}
+{% block content %}
+<h1>{{ title }}</h1><p>{{ path }}</p>
+{% if not place.active %}<p>Место недоступно для нового выбора; существующее содержимое показано.</p>{% endif %}
+<p><a href="{{ cancel_url }}">Все места хранения</a></p>
+{% if children %}<h2>Вложенные места</h2><ul>{% for child in children %}<li><a href="{{ child.url }}">{{ child.name }}</a></li>{% endfor %}</ul>{% endif %}
+<form method="get">
+<label>Область: <select name="include_children"><option value="1" {% if include_children %}selected{% endif %}>Вместе с вложенными местами</option><option value="0" {% if not include_children %}selected{% endif %}>Только это место</option></select></label>
+<label>Нулевые остатки: <select name="show_empty"><option value="0" {% if not show_empty %}selected{% endif %}>Скрыть</option><option value="1" {% if show_empty %}selected{% endif %}>Показать</option></select></label>
+<label>Поиск: <input type="search" name="q" value="{{ q }}"></label><button type="submit">Показать</button>
+</form>
+{% if can_lots %}<h2>Складские партии — найдено {{ lot_page.paginator.count }}</h2>
+<p>Количество, резерв и свободный остаток показаны отдельно по каждой партии и в её единице. Разные продукты и единицы не суммируются.</p>
+<div style="overflow-x:auto"><table><thead><tr><th>Продукт</th><th>Код</th><th>Физический остаток</th><th>Резерв</th><th>Свободно</th><th>Единица</th><th>Место</th><th>Годен до</th><th>Допуск</th></tr></thead><tbody>
+{% for row in lot_rows %}<tr><td><a href="{{ row.url }}">{{ row.obj.name }}</a></td><td>{{ row.obj.code }}</td><td>{{ row.quantity }}</td><td>{{ row.reserved }}</td><td>{{ row.free }}</td><td>{{ row.obj.unit }}</td><td>{{ row.path }}</td><td>{{ row.obj.expiry|default:"Не указан" }}{% if row.obj.expired %} — просрочено{% endif %}</td><td>{% if row.obj.released %}Допущен{% else %}Не допущен{% endif %}</td></tr>{% empty %}<tr><td colspan="9">Складских партий по выбранным условиям нет.</td></tr>{% endfor %}
+</tbody></table></div>
+<p>Страница {{ lot_page.number }} из {{ lot_page.paginator.num_pages }}. {% if lot_links.previous %}<a href="{{ lot_links.previous }}">Назад</a>{% endif %} {% if lot_links.next %}<a href="{{ lot_links.next }}">Далее</a>{% endif %}</p>{% endif %}
+{% if can_samples %}<h2>Образцы и пробы — найдено {{ sample_page.paginator.count }}</h2>
+<div style="overflow-x:auto"><table><thead><tr><th>Серия и номер</th><th>Тип</th><th>Проект</th><th>Место</th></tr></thead><tbody>
+{% for row in sample_rows %}<tr><td><a href="{{ row.url }}">{{ row.obj.code }}</a></td><td>{{ row.obj.kind }}</td><td>{{ row.obj.project }}</td><td>{{ row.path }}</td></tr>{% empty %}<tr><td colspan="4">Образцов по выбранным условиям нет.</td></tr>{% endfor %}
+</tbody></table></div>
+<p>Страница {{ sample_page.number }} из {{ sample_page.paginator.num_pages }}. {% if sample_links.previous %}<a href="{{ sample_links.previous }}">Назад</a>{% endif %} {% if sample_links.next %}<a href="{{ sample_links.next }}">Далее</a>{% endif %}</p>
+{% if unmatched %}<p>Во всей доступной выборке образцов без связи со справочником: {{ unmatched }}. Они не отнесены к этому месту автоматически. <a href="{{ unmatched_url }}">Открыть для проверки</a></p>{% endif %}
+{% endif %}
+<p>Это просмотр содержимого. Он не перемещает объекты, не меняет складские количества и не создаёт операции.</p>
+{% endblock %}

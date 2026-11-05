@@ -540,7 +540,7 @@ class Sample(models.Model):
             "ДНК", "РНК", "Аликвота", "Другое"
         )]
     )
-    location = models.CharField("Место хранения", max_length=240)
+    location = models.CharField("Место хранения (текст)", max_length=240, blank=True)
     note = models.TextField("Примечание", blank=True)
 
     @property
@@ -570,6 +570,26 @@ class Sample(models.Model):
                 name="unique_sample_series_number",
             ),
         ]
+
+    storage_place = models.ForeignKey("StoragePlace", on_delete=models.PROTECT, verbose_name="Место хранения из справочника", related_name="stored_samples", null=True, blank=True)
+    original_location = models.CharField("Место хранения до привязки к справочнику", max_length=240, blank=True, default="", editable=False)
+
+    def save(self, *args, **kwargs):
+        update_fields = kwargs.get("update_fields")
+        if self._state.adding:
+            self.original_location = self.location or ""
+            if not self.storage_place_id and self.location:
+                place = StoragePlace.objects.filter(name=self.location).first()
+                if place is not None:
+                    self.storage_place = place
+        else:
+            self.original_location = type(self).objects.values_list("original_location", flat=True).get(pk=self.pk)
+        if update_fields is None or {"storage_place", "storage_place_id", "location"}.intersection(update_fields):
+            if self.storage_place_id:
+                self.location = StoragePlace.objects.values_list("name", flat=True).get(pk=self.storage_place_id)
+                if update_fields is not None:
+                    kwargs["update_fields"] = set(update_fields) | {"location"}
+        super().save(*args, **kwargs)
 
 STAGES = [
     "Получение материала", "Фиксация материала", "Выделение ДНК/РНК",
@@ -878,13 +898,29 @@ class StoragePlace(models.Model):
     name = models.CharField("Название", max_length=240, unique=True)
     active = models.BooleanField("Доступно для выбора", default=True)
     sort_order = models.PositiveIntegerField("Порядок в списке", default=100)
+    parent = models.ForeignKey("self", on_delete=models.PROTECT, verbose_name="Внутри места хранения", related_name="children", null=True, blank=True)
+
+    def clean(self):
+        super().clean()
+        parent_id = self.parent_id
+        seen = set()
+        while parent_id is not None:
+            if parent_id == self.pk or parent_id in seen:
+                raise ValidationError({"parent": "Нельзя создать цикл во вложенности мест хранения."})
+            seen.add(parent_id)
+            row = type(self).objects.filter(pk=parent_id).values_list("parent_id").first()
+            if row is None:
+                raise ValidationError({"parent": "Родительское место не найдено."})
+            parent_id = row[0]
 
     def save(self, *args, **kwargs):
         with transaction.atomic():
+            list(type(self).objects.select_for_update().order_by("pk").values_list("pk", flat=True))
+            self.clean()
             super().save(*args, **kwargs)
-            # Keep the original text field compatible with existing reports.
             name = type(self).objects.values_list("name", flat=True).get(pk=self.pk)
             Lot.objects.filter(storage_place_id=self.pk).update(location=name)
+            Sample.objects.filter(storage_place_id=self.pk).update(location=name)
 
     def __str__(self):
         return self.name
@@ -893,6 +929,7 @@ class StoragePlace(models.Model):
         verbose_name = "Место хранения"
         verbose_name_plural = "Места хранения"
         ordering = ["sort_order", "name"]
+        constraints = [models.CheckConstraint(condition=Q(parent__isnull=True) | ~Q(parent=F("pk")), name="storage_place_not_self_parent")]
 
 
 class Lot(models.Model):
