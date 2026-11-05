@@ -1,0 +1,35 @@
+{% extends "admin/base_site.html" %}
+{% block content %}
+<h1>{{ title }}</h1>
+<p>Протокол и объём → расчёт → партии и фактический расход → сохранение → отдельное проведение.</p>
+<p>Расчёт и сохранение этой формы не меняют складские остатки и не резервируют партии.</p>
+<form method="post" novalidate>{% csrf_token %}
+{{ form.non_field_errors }}{{ form.request_token }}{{ form.request_token.errors }}
+<fieldset class="module aligned"><h2>1. Протокол и объём</h2>
+<p>{{ form.recipe.label_tag }} {{ form.recipe }} {{ form.recipe.errors }}</p>
+<p>{{ form.planned_volume_ml.label_tag }} {{ form.planned_volume_ml }} {{ form.planned_volume_ml.errors }}</p>
+<p>Стандартный объём: {% for volume in presets %}<button type="submit" name="preset" value="{{ volume }}">{{ volume }} мл</button> {% endfor %}</p>
+<button type="submit" name="action" value="preview">Рассчитать состав / обновить партии</button>
+</fieldset>
+{% if protocol %}<h2>2. План и фактический расход</h2>
+<p>План масштабируется относительно {{ protocol.base_volume_ml }} мл. Концентрации описательные, автоматически не пересчитываются.</p>
+<p>Изменение плана не перезаписывает введённый факт. После смены партии нажмите «Рассчитать состав» для обновления плана в её единице.</p>
+<div style="overflow-x:auto"><table><thead><tr><th>Компонент</th><th>План</th><th>Партия</th><th>План в единице партии</th><th>Фактический расход в единице партии</th></tr></thead><tbody>
+{% for row in rows %}<tr><td>{{ row.component.reagent_name }}<br>Исходная концентрация: {{ row.component.source_concentration|default:"—" }}<br>Конечная концентрация: {{ row.component.final_concentration|default:"—" }}</td><td>{{ row.plan }}</td><td>{{ row.lot }}{{ row.lot.errors }}</td><td>{{ row.lot_plan }}{% if row.warning %}<p class="errornote">{{ row.warning }}</p>{% endif %}</td><td>{{ row.qty }}{{ row.qty.errors }}</td></tr>{% empty %}<tr><td colspan="5">В протоколе нет компонентов. Сначала заполните протокол.</td></tr>{% endfor %}
+</tbody></table></div>
+<p>В мастере выбирается одна партия на компонент. Если расход нужно разделить между партиями, используйте обычную карточку приготовления.</p>
+<h3>Инструкция</h3><div style="white-space:pre-wrap">{{ protocol.instructions }}</div>
+<p>Требования к pH: {{ protocol.target_ph|default:"—" }}</p><div style="white-space:pre-wrap">{{ protocol.processing_notes }}</div>
+{% endif %}
+<fieldset class="module aligned"><h2>3. Фактический выход и хранение</h2>
+<p>{{ form.actual_day.label_tag }} {{ form.actual_day }} {{ form.actual_day.errors }}</p>
+<p>{{ form.actual_volume_ml.label_tag }} {{ form.actual_volume_ml }} {{ form.actual_volume_ml.errors }}</p>
+<p>{{ form.output_category.label_tag }} {{ form.output_category }} {{ form.output_category.errors }}</p>
+<p>{{ form.output_storage_place.label_tag }} {{ form.output_storage_place }} {{ form.output_storage_place.errors }}</p>
+<p>{{ form.output_expiry.label_tag }} {{ form.output_expiry }} {{ form.output_expiry.errors }}</p>
+<p>{{ form.note.label_tag }} {{ form.note }} {{ form.note.errors }}</p>
+</fieldset>
+{% if protocol %}<button type="submit" name="action" value="save">Сохранить приготовление без списания</button>{% endif %}
+<a href="{{ cancel_url }}">Вернуться к списку</a>
+</form>
+{% endblock %}

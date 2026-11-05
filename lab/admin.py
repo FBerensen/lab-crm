@@ -1290,3 +1290,7 @@ _configure_lab_admin(admin.site)
 # LABCRM_PREPARATION_STAGE2
 from .preparation_stage2_admin import configure_admin as _configure_stage2
 _configure_stage2(admin.site)
+
+# LABCRM_PREPARATION_STAGE3
+from .preparation_wizard import configure_admin as _configure_stage3
+_configure_stage3(admin.site)
