@@ -1,13 +1,13 @@
 from types import MethodType
 from .presentation import compact_number
 
-GROUPS = (
-    ("lab_work", "Проекты и работа", ("Project", "Task", "WorkLog", "TaskEvent", "Report")),
-    ("lab_samples", "Образцы и пробы", ("Sample",)),
-    ("lab_stock", "Склад и хранение", ("Lot", "Movement", "StoragePlace")),
-    ("lab_preparation", "Приготовление растворов и буферов", ("BufferName", "PreparationProtocol", "Preparation", "Autoclaving")),
-    ("lab_reference", "Справочники и управление", ("ProductCategory", "Audit")),
-)
+GROUPS = (('lab_work', 'Проекты и работа', ('Project', 'Task', 'WorkLog', 'TaskEvent', 'Report')),
+ ('lab_samples', 'Образцы и пробы', ('Sample', 'SourceBlock')),
+ ('lab_stock', 'Склад и хранение', ('Lot', 'Movement', 'StoragePlace')),
+ ('lab_preparation',
+  'Приготовление растворов и буферов',
+  ('BufferName', 'PreparationProtocol', 'Preparation', 'Autoclaving')),
+ ('lab_reference', 'Справочники и управление', ('ProductCategory', 'Audit')))
 
 
 def group_app_list(apps):

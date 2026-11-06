@@ -42,3 +42,16 @@ create_labcrm.py
 # Accidental nested repository and old copies
 /g/
 *.before-fix
+
+# LABCRM local stage packages and source snapshots
+*.before_*
+/*.zip
+/*.rar
+/stage*/
+/labcrm-stage*/
+/templates8b/
+/Finish-Stage*.ps1
+/Fix-Stage*.ps1
+/Test-Stage*.ps1
+/update_preparation_title.py
+/update_preparation_view.py

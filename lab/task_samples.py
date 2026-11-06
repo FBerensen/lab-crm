@@ -149,7 +149,7 @@ class TaskSamplesForm(forms.ModelForm):
 
             found = list(
                 Sample.objects.filter(
-                    project=project,
+                    projects__pk=project.pk,
                     series=series,
                     number__in=numbers,
                 ).values_list("pk", "number")
@@ -168,7 +168,7 @@ class TaskSamplesForm(forms.ModelForm):
                 ids.update(pk for pk, _ in found)
 
         if Sample.objects.filter(pk__in=ids).exclude(
-            project=project
+            projects__pk=project.pk
         ).exists():
             self.add_error(
                 "samples",

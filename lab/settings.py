@@ -133,3 +133,14 @@ LOGGING = {
         },
     },
 }
+
+# LABCRM_STAGE8B_TEMPLATE_PATH
+from pathlib import Path as _LabCRMTemplatePath8B
+_labcrm_nav8b_dir = _LabCRMTemplatePath8B(__file__).resolve().parents[1] / 'templates8b'
+_labcrm_nav8b_engine = TEMPLATES[0]
+if not _labcrm_nav8b_engine['BACKEND'].endswith('django.DjangoTemplates'):
+    raise RuntimeError('8B template backend changed; review configuration')
+_labcrm_nav8b_engine['DIRS'] = [_labcrm_nav8b_dir] + [
+    _path for _path in (_labcrm_nav8b_engine.get('DIRS') or [])
+    if _LabCRMTemplatePath8B(_path).resolve() != _labcrm_nav8b_dir
+]

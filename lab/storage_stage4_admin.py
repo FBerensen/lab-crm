@@ -74,9 +74,9 @@ def configure_admin(site):
         if can_samples:
             base = sample_admin.get_queryset(request)
             unmatched = base.filter(storage_place__isnull=True).count()
-            samples = base.filter(storage_place_id__in=selected_ids).select_related("storage_place", "project").order_by("series", "number", "pk")
+            samples = base.filter(storage_place_id__in=selected_ids).select_related("storage_place").prefetch_related("projects").order_by("series", "number", "pk")
             if query:
-                samples = samples.filter(Q(series__icontains=query) | Q(number__icontains=query) | Q(project__title__icontains=query))
+                samples = samples.filter(Q(series__icontains=query) | Q(number__icontains=query) | Q(projects__title__icontains=query)).distinct()
             sample_page = Paginator(samples, 50).get_page(request.GET.get("sample_page"))
             for sample in sample_page.object_list:
                 sample_rows.append({"obj": sample, "url": reverse("admin:lab_sample_change", args=[sample.pk]), "path": place_path(sample.storage_place_id, places)})

@@ -17,7 +17,7 @@
 <p>Страница {{ lot_page.number }} из {{ lot_page.paginator.num_pages }}. {% if lot_links.previous %}<a href="{{ lot_links.previous }}">Назад</a>{% endif %} {% if lot_links.next %}<a href="{{ lot_links.next }}">Далее</a>{% endif %}</p>{% endif %}
 {% if can_samples %}<h2>Образцы и пробы — найдено {{ sample_page.paginator.count }}</h2>
 <div style="overflow-x:auto"><table><thead><tr><th>Серия и номер</th><th>Тип</th><th>Проект</th><th>Место</th></tr></thead><tbody>
-{% for row in sample_rows %}<tr><td><a href="{{ row.url }}">{{ row.obj.code }}</a></td><td>{{ row.obj.kind }}</td><td>{{ row.obj.project }}</td><td>{{ row.path }}</td></tr>{% empty %}<tr><td colspan="4">Образцов по выбранным условиям нет.</td></tr>{% endfor %}
+{% for row in sample_rows %}<tr><td><a href="{{ row.url }}">{{ row.obj.code }}</a></td><td>{{ row.obj.kind }}</td><td>{{ row.obj.project_names }}</td><td>{{ row.path }}</td></tr>{% empty %}<tr><td colspan="4">Образцов по выбранным условиям нет.</td></tr>{% endfor %}
 </tbody></table></div>
 <p>Страница {{ sample_page.number }} из {{ sample_page.paginator.num_pages }}. {% if sample_links.previous %}<a href="{{ sample_links.previous }}">Назад</a>{% endif %} {% if sample_links.next %}<a href="{{ sample_links.next }}">Далее</a>{% endif %}</p>
 {% if unmatched %}<p>Во всей доступной выборке образцов без связи со справочником: {{ unmatched }}. Они не отнесены к этому месту автоматически. <a href="{{ unmatched_url }}">Открыть для проверки</a></p>{% endif %}

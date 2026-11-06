@@ -1302,3 +1302,77 @@ _configure_storage4(admin.site)
 # LABCRM_SAMPLE_SERIES_STAGE5A
 from .sample_series_stage5 import configure_admin as _configure_series5
 _configure_series5(admin.site)
+
+# LABCRM_STAGE5B1
+from .sample_stage5b_admin import install as _install_stage5b1
+_install_stage5b1(admin.site)
+
+# LABCRM_STAGE5B2
+from .material_passport_admin import install as _install_stage5b2
+_install_stage5b2(admin.site)
+
+# LABCRM_STAGE5B3
+from .passport_excel import install as _install_stage5b3
+_install_stage5b3(admin.site)
+
+# LABCRM_STAGE6A
+from .worklog6_admin import install as _install_stage6a
+_install_stage6a(admin.site)
+
+# LABCRM_STAGE6B1
+from .stock_availability import install as _install_stage6b1
+_install_stage6b1(admin.site)
+
+# LABCRM_STAGE6B2
+from .lab6b2_admin import install as _install_stage6b2
+_install_stage6b2(admin.site)
+
+# LABCRM_STAGE7A
+from .preparation_calculator import install as _install_stage7a
+_install_stage7a(admin.site)
+
+# LABCRM_STAGE7B
+from .preparation_allocation import install as _install_stage7b
+_install_stage7b(admin.site)
+
+# LABCRM_STAGE7V
+from .preparation_drafts_admin import install as _install_stage7v
+_install_stage7v(admin.site)
+
+# LABCRM_STAGE7G
+from .preparation_readiness_admin import install as _install_stage7g
+_install_stage7g(admin.site)
+
+# LABCRM_STAGE7D
+from .preparation_list7d import install as _install_stage7d
+_install_stage7d(admin.site)
+
+# LABCRM_STAGE8A
+from .sample_projects8a_admin import install as _install_stage8a
+_install_stage8a(admin.site)
+
+# LABCRM_STAGE8B
+from .navigation8b import install as _install_stage8b
+_install_stage8b(admin.site)
+
+# LABCRM_STAGE8V
+from .source_blocks8v_admin import install as _install_stage8v
+_install_stage8v(admin.site)
+
+# LABCRM_STAGE8D
+from .storage8d_admin import install as _install_storage8d
+_install_storage8d(admin.site)
+
+
+# LABCRM_STAGE8E
+from .storage8e_admin import install as _install_storage8e
+_install_storage8e(admin.site)
+
+
+# LABCRM_STAGE8ZH
+from .storage8zh_admin import install as _install_storage8zh
+_install_storage8zh(admin.site)
+
+# LABCRM_STAGE8Z
+from .storage8z_admin import install as _install_storage8z
+_install_storage8z(admin.site)

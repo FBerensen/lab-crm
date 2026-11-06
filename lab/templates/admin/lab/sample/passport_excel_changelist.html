@@ -1,0 +1,6 @@
+{% extends passport_previous_template %}
+{% block object-tools-items %}{{ block.super }}
+{% if passport_can_edit %}
+<li><a href="{% url 'admin:lab_sample_passport_excel' %}">Паспорта из Excel</a></li>
+<li><a href="{% url 'admin:lab_sample_passport_template' %}">Шаблон Excel</a></li>
+{% endif %}{% endblock %}

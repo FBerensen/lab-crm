@@ -9,9 +9,9 @@ from django.urls import path, reverse
 
 def series_summary(queryset, query=""):
     rows = queryset.order_by().values("series").annotate(
-        samples=Count("pk"), projects=Count("project_id", distinct=True),
+        samples=Count("pk", distinct=True), projects=Count("projects__pk", distinct=True),
         places=Count("storage_place_id", distinct=True),
-        unplaced=Count("pk", filter=Q(storage_place__isnull=True)),
+        unplaced=Count("pk", filter=Q(storage_place__isnull=True), distinct=True),
     ).order_by("series")
     if query:
         rows = rows.filter(series__icontains=query)
@@ -40,7 +40,7 @@ def configure_admin(site):
         names = [row["series"] for row in rows]
         projects = {}
         places = {}
-        for series, pk, title in base.filter(series__in=names).order_by("series", "project_id").values_list("series", "project_id", "project__title").distinct():
+        for series, pk, title in base.filter(series__in=names).order_by("series", "projects__pk").values_list("series", "projects__pk", "projects__title").distinct():
             projects.setdefault(series, []).append({"title": title, "id": pk})
         for series, pk, name in base.filter(series__in=names, storage_place__isnull=False).order_by("series", "storage_place_id").values_list("series", "storage_place_id", "storage_place__name").distinct():
             places.setdefault(series, []).append({"name": name, "id": pk})
