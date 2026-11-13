@@ -1,0 +1,19 @@
+{% extends "admin/lab/storageplace/contents.html" %}
+{% block content %}
+{{ block.super }}
+{% if can_blocks %}
+<h2>Исходные блоки — найдено {{ block_page.paginator.count }}</h2>
+<p>Блоки показаны отдельно от карточек проб и складских партий. Схемы без заполненных лунок тоже отображаются.
+Число лунок не является количеством отдельных карточек проб или складским остатком.</p>
+<div style="overflow-x:auto"><table><thead><tr><th>Код</th><th>Название</th><th>Место</th><th>Заполнено лунок</th><th>Пробы: лунок / различных</th><th>Контроли</th><th>Не зарегистрировано</th><th>Схема</th></tr></thead><tbody>
+{% for row in block_rows %}<tr><td><a href="{{ row.url }}">{{ row.obj.code }}</a></td><td>{{ row.obj.name }}</td><td>{{ row.path }}</td>
+<td>{{ row.stats.filled }} / 96</td><td>{{ row.stats.sample_wells }} / {{ row.stats.unique_samples }}</td><td>{{ row.stats.controls }}</td><td>{{ row.stats.raw }}</td><td><a href="{{ row.layout_url }}">Открыть схему</a></td></tr>
+{% empty %}<tr><td colspan="8">Исходных блоков по выбранным условиям нет.</td></tr>{% endfor %}
+</tbody></table></div>
+<p>Страница {{ block_page.number }} из {{ block_page.paginator.num_pages }}.
+{% if block_links.previous %}<a href="{{ block_links.previous }}">Назад</a>{% endif %}
+{% if block_links.next %}<a href="{{ block_links.next }}">Далее</a>{% endif %}</p>
+{% if unplaced_blocks %}<p>Во всей доступной выборке блоков без места: {{ unplaced_blocks }}. Они не отнесены к этому месту автоматически.
+<a href="{{ unplaced_blocks_url }}">Открыть для проверки</a></p>{% endif %}
+{% endif %}
+{% endblock %}

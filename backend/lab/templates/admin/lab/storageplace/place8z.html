@@ -1,0 +1,82 @@
+{% extends "admin/base_site.html" %}
+{% block content %}
+<!-- LABCRM_STORAGE8Z -->
+<h1>{{ title }}</h1>
+<p>Целевое место: {{ destination_path }}</p>
+<p><a href="{{ back_url }}">Вернуться к содержимому места</a></p>
+
+{% if error %}
+<p class="errornote">{{ error }}</p>
+{% else %}
+
+{% if form %}
+{% if preview %}
+<h2>Подтверждение</h2>
+<p>Объект: {{ object_label }}</p>
+<p>Текущее место: {{ source_path }}</p>
+<p>Целевое место: {{ destination_path }}</p>
+{% if is_transfer %}
+<p class="errornote">Объект уже размещён. Подтверждение перенесёт его из текущего места в целевое.</p>
+{% endif %}
+{% if is_lot %}
+<p>Переносится вся складская карточка. Остаток, резерв и единица учёта не меняются. Частичный перенос здесь не выполняется.</p>
+{% endif %}
+{% if is_block %}
+<p>Переносится весь исходный блок. Места исходных проб и состав лунок не меняются.</p>
+{% endif %}
+{% endif %}
+
+{% if same_place %}
+<p>Объект уже находится в целевом месте. Изменение не требуется.</p>
+{% else %}
+<form method="post" action="{{ base_url }}">
+{% csrf_token %}
+{{ form.as_p }}
+<div class="submit-row">
+<button type="submit" class="default">Подтвердить размещение</button>
+</div>
+</form>
+{% endif %}
+<p><a href="{{ base_url }}">Начать выбор заново</a></p>
+
+{% else %}
+<form method="get" action="{{ base_url }}">
+<p>
+<label for="id_group">Тип объекта:</label>
+<select name="group" id="id_group" required>
+<option value="">Выберите тип</option>
+{% for key,label in groups %}
+<option value="{{ key }}" {% if group == key %}selected{% endif %}>{{ label }}</option>
+{% endfor %}
+</select>
+</p>
+<p>
+<label for="id_q">Поиск:</label>
+<input type="search" name="q" id="id_q" value="{{ q }}" maxlength="200">
+</p>
+<button type="submit">Найти объекты</button>
+</form>
+
+{% if group %}
+<h2>Выберите объект</h2>
+<table>
+<thead><tr><th>Объект</th><th>Текущее место</th><th>Действие</th></tr></thead>
+<tbody>
+{% for row in rows %}
+<tr>
+<td>{{ row.label }}</td><td>{{ row.source }}</td>
+<td><a href="{{ row.url }}">Выбрать</a></td>
+</tr>
+{% empty %}
+<tr><td colspan="3">На этой странице нет доступных объектов. Уточните поиск или проверьте другие страницы.</td></tr>
+{% endfor %}
+</tbody>
+</table>
+<p>Страница {{ page.number }} из {{ page.paginator.num_pages }}.
+{% if links.previous %}<a href="{{ links.previous }}">Назад</a>{% endif %}
+{% if links.next %}<a href="{{ links.next }}">Далее</a>{% endif %}
+</p>
+{% endif %}
+{% endif %}
+{% endif %}
+{% endblock %}

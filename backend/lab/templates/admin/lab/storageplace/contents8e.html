@@ -1,0 +1,37 @@
+{% extends "admin/base_site.html" %}
+{% block content %}
+<!-- LABCRM_STORAGE8E -->
+<h1>{{ title }}</h1><p>{{ path }}</p>
+{% if not place.active %}<p>Место недоступно для нового выбора; существующее содержимое показано.</p>{% endif %}
+<p><a href="{{ cancel_url }}">Все места хранения</a></p>
+{% if storage8z_place_url %}
+<p><a class="button" style="display:inline-block;padding:10px 16px" href="{{ storage8z_place_url }}">Разместить материал</a></p>
+{% endif %}
+{% if children %}<h2>Вложенные места</h2><ul>{% for child in children %}<li><a href="{{ child.url }}">{{ child.name }}</a></li>{% endfor %}</ul>{% endif %}
+<form method="get" style="display:grid;gap:12px;margin-bottom:24px">
+<input type="hidden" name="columns_set" value="1">
+<label>Тип содержимого: <select name="content_type">{% for option in storage8e_groups %}<option value="{{ option.value }}" {% if option.selected %}selected{% endif %}>{{ option.label }}</option>{% endfor %}</select></label>
+<label>Область: <select name="include_children"><option value="1" {% if include_children %}selected{% endif %}>Вместе с вложенными местами</option><option value="0" {% if not include_children %}selected{% endif %}>Только это место</option></select></label>
+{% if storage8e_can_samples %}<label>Тип материала пробы: <select name="material_kind"><option value="">Все типы материала</option>{% for option in storage8e_kinds %}<option value="{{ option.value }}" {% if option.selected %}selected{% endif %}>{{ option.label }}</option>{% endfor %}</select></label>{% endif %}
+{% if storage8e_can_lots %}<label>Внесение складского продукта: <select name="category"><option value="">Все категории</option>{% for option in storage8e_categories %}<option value="{{ option.value }}" {% if option.selected %}selected{% endif %}>{{ option.label }}</option>{% endfor %}</select></label>
+<label>Нулевые остатки: <select name="show_empty"><option value="0" {% if not show_empty %}selected{% endif %}>Скрыть</option><option value="1" {% if show_empty %}selected{% endif %}>Показать</option></select></label>{% endif %}
+<label>Поиск: <input type="search" name="q" value="{{ q }}"></label>
+<details><summary>Настройки таблиц</summary>
+<p>Настройки передаются в адресе страницы. Название объекта скрыть нельзя. Тип материала применяется только к пробам, категория — только к складским продуктам.</p>
+{% for setting in storage8e_settings %}<fieldset class="module aligned" style="padding:12px"><legend>{{ setting.title }}</legend>
+<label>Строк на странице: <select name="{{ setting.key }}_size">{% for size in setting.sizes %}<option value="{{ size.value }}" {% if size.selected %}selected{% endif %}>{{ size.value }}</option>{% endfor %}</select></label>
+<div style="display:flex;flex-wrap:wrap;gap:12px;margin-top:12px">{% for column in setting.columns %}<label><input type="checkbox" name="{{ setting.key }}_cols" value="{{ column.key }}" {% if column.checked %}checked{% endif %} {% if column.mandatory %}disabled{% endif %}> {{ column.label }}</label>{% endfor %}</div>
+</fieldset>{% endfor %}</details>
+<div><button type="submit" style="padding:10px 18px;font-size:14px">Показать</button> <a href="{{ storage8e_reset }}">Сбросить настройки</a></div>
+</form>
+<p>Остаток, резерв и свободное количество показаны с единицами рядом с числами; единица учёта указана отдельно. Разные продукты и единицы не суммируются. Блоки не считаются отдельными карточками проб; пустые схемы также показаны.</p>
+{% for section in storage8e_sections %}<section><h2>{{ section.title }} — найдено {{ section.page.paginator.count }}</h2>
+<div style="overflow-x:auto"><table><thead><tr>{% for key,label in section.columns %}<th scope="col">{{ label }}</th>{% endfor %}</tr></thead><tbody>
+{% for row in section.rows %}<tr>{% for cell in row %}<td>{% if cell.url %}<a href="{{ cell.url }}">{{ cell.value }}</a>{% else %}{{ cell.value }}{% endif %}</td>{% endfor %}</tr>{% empty %}<tr><td colspan="{{ section.columns|length }}">По выбранным условиям объектов нет.</td></tr>{% endfor %}
+</tbody></table></div>
+<p>Страница {{ section.page.number }} из {{ section.page.paginator.num_pages }}. {% if section.links.previous %}<a href="{{ section.links.previous }}">Назад</a>{% endif %} {% if section.links.next %}<a href="{{ section.links.next }}">Далее</a>{% endif %}</p></section>
+{% empty %}<p>Нет доступных для просмотра групп по выбранному типу.</p>{% endfor %}
+{% if can_samples and unmatched %}<p>Во всей доступной выборке проб без места: {{ unmatched }}. <a href="{{ unmatched_url }}">Открыть для проверки</a>. Они не отнесены к этому месту автоматически.</p>{% endif %}
+{% if can_blocks and unplaced_blocks %}<p>Во всей доступной выборке исходных блоков без места: {{ unplaced_blocks }}. <a href="{{ unplaced_blocks_url }}">Открыть для проверки</a>. Они не отнесены к этому месту автоматически.</p>{% endif %}
+<p>Это просмотр содержимого. Он не перемещает объекты, не меняет складские количества и не создаёт операции.</p>
+{% endblock %}
